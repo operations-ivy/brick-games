@@ -1,0 +1,75 @@
+# Nothing in or out of the namespace unless listed here.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: default-deny, namespace: games}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# The page: from Traefik (the front door's route in) and Prometheus.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: web-ingress, namespace: games}
+spec:
+  podSelector:
+    matchLabels: {app: brick-games-web}
+  policyTypes: [Ingress]
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels: {kubernetes.io/metadata.name: kube-system}
+      podSelector:
+        matchLabels: {app.kubernetes.io/name: traefik}
+    - namespaceSelector:
+        matchLabels: {kubernetes.io/metadata.name: monitoring}
+      podSelector:
+        matchLabels: {app.kubernetes.io/name: prometheus}
+    ports:
+    - port: 8080
+---
+# The scan: libretro's thumbnails and database over HTTPS (the internet only:
+# private ranges excluded), and the Pushgateway for its run's numbers.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: scan-egress, namespace: games}
+spec:
+  podSelector:
+    matchLabels: {app: brick-games-scan}
+  policyTypes: [Egress]
+  egress:
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]
+    ports:
+    - port: 443
+  - to:
+    - namespaceSelector:
+        matchLabels: {kubernetes.io/metadata.name: monitoring}
+      podSelector:
+        matchLabels: {app.kubernetes.io/name: prometheus-pushgateway}
+    ports:
+    - port: 9091
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: egress-dns-and-traces, namespace: games}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels: {kubernetes.io/metadata.name: kube-system}
+      podSelector:
+        matchLabels: {k8s-app: kube-dns}
+    ports:
+    - {port: 53, protocol: UDP}
+    - {port: 53, protocol: TCP}
+  - to:
+    - namespaceSelector:
+        matchLabels: {kubernetes.io/metadata.name: monitoring}
+      podSelector:
+        matchLabels: {app.kubernetes.io/name: opentelemetry-collector}
+    ports:
+    - port: 4317

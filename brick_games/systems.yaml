@@ -1,0 +1,147 @@
+# The systems in brick2000's /extra/games/roms, and where each plays.
+#
+#   folder:   the directory under ROMS_ROOT (a system can have several)
+#   libretro: the system's name in libretro's thumbnails and database
+#   exts:     the game files (anything else in the folder is ignored:
+#             .dat, .txt, saves, artwork, per-track .bin of a .cue game)
+#   devices:  device id -> good (full speed) | ok (most games; some slow or
+#             need per-game settings) | no; see `devices` below
+#
+# Measured 2026-11-13 on the Retroid Pocket 2+ (homelab-context docs/retroid.md);
+# brick9000 from its brick-retro cores (hosts.md); the RG476H is expected, not
+# measured, until it arrives.
+
+devices:
+  brick9000: {name: "brick9000", what: "the arcade cabinet (Pi 4, RetroArch)"}
+  rp2plus: {name: "Retroid Pocket 2+", what: "the handheld (Daijisho)"}
+  rg476h: {name: "RG476H", what: "the new handheld (expected)"}
+
+systems:
+  - id: nes
+    name: "Nintendo Entertainment System"
+    folders: [nes]
+    libretro: "Nintendo - Nintendo Entertainment System"
+    exts: [nes, fds]
+    devices: {brick9000: good, rp2plus: good, rg476h: good}
+  - id: snes
+    name: "Super Nintendo"
+    folders: [snes]
+    libretro: "Nintendo - Super Nintendo Entertainment System"
+    exts: [smc, sfc]
+    devices: {brick9000: good, rp2plus: good, rg476h: good}
+  - id: gb
+    name: "Game Boy / Color"
+    folders: [gb, gbc]
+    libretro: "Nintendo - Game Boy"
+    exts: [gb, gbc, zip]
+    devices: {brick9000: good, rp2plus: good, rg476h: good}
+  - id: gba
+    name: "Game Boy Advance"
+    folders: [gba]
+    libretro: "Nintendo - Game Boy Advance"
+    exts: [gba]
+    devices: {brick9000: good, rp2plus: good, rg476h: good}
+  - id: n64
+    name: "Nintendo 64"
+    folders: [n64]
+    libretro: "Nintendo - Nintendo 64"
+    exts: [n64, z64, v64]
+    devices: {brick9000: no, rp2plus: ok, rg476h: good}
+  - id: nds
+    name: "Nintendo DS"
+    folders: [nds]
+    libretro: "Nintendo - Nintendo DS"
+    exts: [nds]
+    devices: {brick9000: no, rp2plus: no, rg476h: good}
+  - id: gc
+    name: "GameCube"
+    folders: [gc]
+    libretro: "Nintendo - GameCube"
+    exts: [rvz, iso, gcz]
+    devices: {brick9000: no, rp2plus: no, rg476h: ok}
+  - id: wii
+    name: "Wii"
+    folders: [Wii]
+    libretro: "Nintendo - Wii"
+    exts: [wbfs, rvz, iso]
+    devices: {brick9000: no, rp2plus: no, rg476h: ok}
+  - id: megadrive
+    name: "Genesis / Mega Drive"
+    folders: [megadrive]
+    libretro: "Sega - Mega Drive - Genesis"
+    exts: [bin, md, gen, smd]
+    devices: {brick9000: good, rp2plus: good, rg476h: good}
+  - id: gamegear
+    name: "Game Gear"
+    folders: [gamegear]
+    libretro: "Sega - Game Gear"
+    exts: [gg, zip]
+    devices: {brick9000: no, rp2plus: good, rg476h: good}
+  - id: sega32x
+    name: "Sega 32X"
+    folders: [sega32x]
+    libretro: "Sega - 32X"
+    exts: [32x]
+    devices: {brick9000: good, rp2plus: good, rg476h: good}
+  - id: segacd
+    name: "Sega CD"
+    folders: [segacd]
+    libretro: "Sega - Mega-CD - Sega CD"
+    exts: [chd, cue]
+    devices: {brick9000: good, rp2plus: good, rg476h: good}
+  - id: saturn
+    name: "Sega Saturn"
+    folders: [segasaturn]
+    libretro: "Sega - Saturn"
+    exts: [cue, chd]
+    devices: {brick9000: no, rp2plus: no, rg476h: good}
+  - id: dreamcast
+    name: "Dreamcast"
+    folders: [Dreamcast]
+    libretro: "Sega - Dreamcast"
+    exts: [chd, cdi, gdi]
+    devices: {brick9000: ok, rp2plus: good, rg476h: good}
+  - id: pce
+    name: "PC Engine / TurboGrafx-16"
+    folders: [pcengine]
+    libretro: "NEC - PC Engine - TurboGrafx 16"
+    exts: [pce]
+    devices: {brick9000: no, rp2plus: good, rg476h: good}
+  - id: pcecd
+    name: "PC Engine CD"
+    folders: [pcengine]
+    libretro: "NEC - PC Engine CD - TurboGrafx-CD"
+    exts: [cue, chd]
+    devices: {brick9000: no, rp2plus: good, rg476h: good}
+  - id: psx
+    name: "PlayStation"
+    folders: [psx]
+    libretro: "Sony - PlayStation"
+    exts: [chd, cue, pbp]
+    devices: {brick9000: good, rp2plus: good, rg476h: good}
+  - id: ps2
+    name: "PlayStation 2"
+    folders: [PS2]
+    libretro: "Sony - PlayStation 2"
+    exts: [iso, chd]
+    devices: {brick9000: no, rp2plus: no, rg476h: ok}
+  - id: psp
+    name: "PlayStation Portable"
+    folders: [psp]
+    libretro: "Sony - PlayStation Portable"
+    exts: [iso, cso, pbp]
+    devices: {brick9000: ok, rp2plus: no, rg476h: good}
+  - id: neogeo
+    name: "Neo Geo"
+    folders: [neogeo]
+    libretro: "SNK - Neo Geo"
+    exts: [zip]
+    arcade: true
+    devices: {brick9000: good, rp2plus: good, rg476h: good}
+  - id: arcade
+    name: "Arcade (FinalBurn Neo)"
+    folders: [fba, fba-retroid]
+    libretro: "FBNeo - Arcade Games"
+    exts: [zip]
+    arcade: true
+    devices: {brick9000: good, rp2plus: good, rg476h: good}

@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Argo CD renders this directory with Kustomize. Both workloads use the bare
+# image whitepatrick/brick-games; the tag is stamped from `images:` below, so a
+# release bumps one line here (plus the version in pyproject.toml). Build the
+# tag first: Jenkins' build-branches builds a release/ branch's newTag. Argo
+# prunes, so every manifest must be listed.
+
+resources:
+  - namespace.yaml
+  - pvc.yaml
+  - networkpolicy.yaml
+  - web-deployment.yaml
+  - ingress.yaml
+  - scan-cronjob.yaml
+  - podmonitor.yaml
+
+images:
+  - name: whitepatrick/brick-games
+    newTag: 0.1.0

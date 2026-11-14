@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>brick games</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=Rajdhani:wght@500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --void: #04050a; --panel: #0a0e19; --grid: #0e1630; --edge: #1a2442;
+    --text: #c9f3ff; --dim: #5b7799; --slate: #6c7c95;
+    --cyan: #00eaff; --magenta: #ff2bd6; --green: #39ff6a; --amber: #ffb300; --red: #ff3355;
+    --pixel: 'Silkscreen', 'Courier New', monospace;
+    --ui: 'Rajdhani', 'Segoe UI', sans-serif;
+    --mono: 'Share Tech Mono', 'Courier New', monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--void); color: var(--text); font-family: var(--ui); font-size: 16px; }
+  body::after { /* the CRT: faint scanlines over everything */
+    content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 50;
+    background: repeating-linear-gradient(to bottom, rgba(0,0,0,0) 0 2px, rgba(0,0,0,.18) 2px 3px);
+  }
+  header { position: sticky; top: 0; z-index: 10; background: linear-gradient(var(--void) 80%, rgba(4,5,10,0));
+           padding: 14px 16px 10px; }
+  .title { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  h1 { margin: 0; font-family: var(--pixel); font-size: 26px; letter-spacing: 2px; color: var(--cyan);
+       text-shadow: 0 0 8px rgba(0,234,255,.7), 0 0 22px rgba(255,43,214,.35); }
+  .count { font-family: var(--mono); color: var(--dim); }
+  .controls { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  input[type=search], select {
+    background: var(--panel); color: var(--text); border: 1px solid var(--edge); border-radius: 6px;
+    font: 600 16px var(--ui); padding: 8px 10px; outline: none; }
+  input[type=search] { flex: 1 1 260px; min-width: 0; }
+  input[type=search]:focus, select:focus { border-color: var(--cyan); box-shadow: 0 0 0 1px var(--cyan), 0 0 12px rgba(0,234,255,.35); }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .chip { font: 700 12px var(--pixel); letter-spacing: 1px; text-transform: uppercase; cursor: pointer;
+          padding: 5px 9px; border-radius: 4px; border: 1px solid var(--edge); background: var(--panel); color: var(--slate); }
+  .chip:hover { color: var(--text); }
+  .chip.on { color: var(--void); background: var(--cyan); border-color: var(--cyan); box-shadow: 0 0 10px rgba(0,234,255,.5); }
+  .chip .n { font-family: var(--mono); opacity: .75; margin-left: 4px; }
+  main { padding: 6px 16px 40px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--edge); border-radius: 8px; overflow: hidden; cursor: pointer;
+          display: flex; flex-direction: column; transition: transform .12s, box-shadow .12s, border-color .12s; }
+  .card:hover, .card:focus-visible { transform: translateY(-2px); border-color: var(--magenta);
+          box-shadow: 0 0 14px rgba(255,43,214,.45); outline: none; }
+  .art { aspect-ratio: 3 / 4; background: var(--grid); display: flex; align-items: center; justify-content: center; }
+  .art img { width: 100%; height: 100%; object-fit: contain; }
+  .art .none { font: 700 13px var(--pixel); color: var(--dim); text-align: center; padding: 8px; }
+  .meta { padding: 8px 9px 10px; }
+  .name { font-weight: 700; font-size: 15px; line-height: 1.15; }
+  .sub { font: 12px var(--mono); color: var(--dim); margin-top: 3px; }
+  .more { display: block; margin: 22px auto 0; }
+  button { font: 700 13px var(--pixel); letter-spacing: 1px; background: var(--panel); color: var(--cyan);
+           border: 1px solid var(--cyan); border-radius: 6px; padding: 9px 14px; cursor: pointer; }
+  button:hover { box-shadow: 0 0 12px rgba(0,234,255,.5); }
+  .empty, .note { font-family: var(--mono); color: var(--dim); padding: 30px 0; text-align: center; }
+  dialog { background: var(--panel); color: var(--text); border: 1px solid var(--magenta); border-radius: 10px;
+           box-shadow: 0 0 30px rgba(255,43,214,.35); padding: 0; width: min(880px, calc(100vw - 32px)); }
+  dialog::backdrop { background: rgba(4,5,10,.85); }
+  .dlg { display: grid; grid-template-columns: minmax(0, 280px) 1fr; gap: 18px; padding: 18px; }
+  @media (max-width: 640px) { .dlg { grid-template-columns: 1fr; } }
+  .dlg h2 { margin: 0 0 4px; font-size: 26px; line-height: 1.1; }
+  .dlg .sys { font: 700 12px var(--pixel); color: var(--magenta); letter-spacing: 1px; }
+  .shots { display: flex; gap: 8px; margin-top: 8px; }
+  .shots img { width: 50%; border: 1px solid var(--edge); border-radius: 4px; image-rendering: pixelated; }
+  .box img { width: 100%; border-radius: 6px; }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 14px 0; font-family: var(--mono); font-size: 14px; }
+  dt { color: var(--dim); }
+  .plays { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 12px; }
+  .badge { font: 12px var(--mono); padding: 4px 8px; border-radius: 4px; border: 1px solid var(--edge); }
+  .badge.good { color: var(--green); border-color: var(--green); }
+  .badge.ok { color: var(--amber); border-color: var(--amber); }
+  .badge.no { color: var(--slate); text-decoration: line-through; }
+  .files { font: 12px var(--mono); color: var(--dim); max-height: 110px; overflow: auto; white-space: pre; margin-top: 10px; }
+  a { color: var(--cyan); }
+  .close { position: absolute; top: 10px; right: 10px; }
+  h3 { font: 700 12px var(--pixel); letter-spacing: 1px; color: var(--slate); margin: 10px 0 4px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="title"><h1>BRICK GAMES</h1><span class="count" id="count">loading…</span></div>
+  <div class="controls">
+    <input type="search" id="q" placeholder="Search titles, developers, genres…" autocomplete="off">
+    <select id="device" aria-label="Plays on">
+      <option value="">Any device</option>
+    </select>
+    <select id="genre" aria-label="Genre"><option value="">Any genre</option></select>
+    <select id="sort" aria-label="Sort">
+      <option value="title">A–Z</option><option value="year">Oldest first</option><option value="-year">Newest first</option>
+    </select>
+  </div>
+  <div class="chips" id="systems"></div>
+</header>
+<main>
+  <div class="grid" id="grid"></div>
+  <div class="empty" id="empty" hidden>No games match.</div>
+  <button class="more" id="more" hidden>MORE</button>
+</main>
+<dialog id="dlg"></dialog>
+<script>
+"use strict";
+const PAGE = 120;
+let cat = null, shown = 0, matches = [];
+const state = { q: "", system: "", device: "", genre: "", sort: "title" };
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+async function load() {
+  const r = await fetch("/api/catalog");
+  if (!r.ok) { $("count").textContent = "the first scan hasn't finished yet"; return; }
+  cat = await r.json();
+  cat.bySystem = Object.fromEntries(cat.systems.map((s) => [s.id, s]));
+  for (const g of cat.games) {
+    g.hay = [g.title, g.genre, g.developer, g.publisher, cat.bySystem[g.system].name].join(" ").toLowerCase();
+  }
+  for (const [id, d] of Object.entries(cat.devices)) {
+    $("device").insertAdjacentHTML("beforeend", `<option value="${esc(id)}">Plays on ${esc(d.name)}</option>`);
+  }
+  const genres = [...new Set(cat.games.map((g) => g.genre).filter(Boolean))].sort();
+  for (const g of genres) $("genre").insertAdjacentHTML("beforeend", `<option>${esc(g)}</option>`);
+  chips();
+  readHash();
+  render();
+}
+
+function chips() {
+  const all = `<span class="chip ${state.system ? "" : "on"}" data-s="">All<span class="n">${cat.games.length}</span></span>`;
+  $("systems").innerHTML = all + cat.systems.map((s) =>
+    `<span class="chip ${state.system === s.id ? "on" : ""}" data-s="${esc(s.id)}">${esc(s.name)}<span class="n">${s.count}</span></span>`).join("");
+}
+
+function playable(g, device) {
+  const v = cat.bySystem[g.system].devices[device];
+  return v === "good" || v === "ok";
+}
+
+function filter() {
+  const words = state.q.toLowerCase().split(/\s+/).filter(Boolean);
+  matches = cat.games.filter((g) =>
+    (!state.system || g.system === state.system) &&
+    (!state.device || playable(g, state.device)) &&
+    (!state.genre || g.genre === state.genre) &&
+    words.every((w) => g.hay.includes(w)));
+  const year = (g) => parseInt(g.year) || (state.sort === "year" ? 9999 : 0);
+  if (state.sort === "year") matches.sort((a, b) => year(a) - year(b) || a.title.localeCompare(b.title));
+  else if (state.sort === "-year") matches.sort((a, b) => year(b) - year(a) || a.title.localeCompare(b.title));
+  else matches.sort((a, b) => a.title.localeCompare(b.title));
+}
+
+function card(g) {
+  const pic = g.art.box || g.art.title || g.art.snap;
+  const art = pic ? `<img loading="lazy" src="/media/${esc(pic)}" alt="">` : `<div class="none">${esc(g.title)}</div>`;
+  const sub = [cat.bySystem[g.system].name, g.year].filter(Boolean).join(" · ");
+  return `<div class="card" tabindex="0" data-id="${esc(g.id)}"><div class="art">${art}</div>
+    <div class="meta"><div class="name">${esc(g.title)}</div><div class="sub">${esc(sub)}</div></div></div>`;
+}
+
+function render() {
+  filter();
+  shown = 0;
+  $("grid").innerHTML = "";
+  more();
+  $("count").textContent = `${matches.length} of ${cat.games.length} games · ${cat.systems.length} systems`;
+  $("empty").hidden = matches.length > 0;
+  writeHash();
+}
+
+function more() {
+  const next = matches.slice(shown, shown + PAGE);
+  $("grid").insertAdjacentHTML("beforeend", next.map(card).join(""));
+  shown += next.length;
+  $("more").hidden = shown >= matches.length;
+}
+
+function open(id) {
+  const g = cat.games.find((x) => x.id === id);
+  if (!g) return;
+  const s = cat.bySystem[g.system];
+  const facts = [["Year", g.year], ["Genre", g.genre], ["Players", g.players], ["Developer", g.developer],
+                 ["Publisher", g.publisher], ["Discs", g.discs > 1 ? g.discs : null]]
+    .filter(([, v]) => v).map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join("");
+  const plays = Object.entries(cat.devices).map(([id, d]) => {
+    const v = s.devices[id] || "no";
+    const word = { good: "plays", ok: "mostly", no: "no" }[v];
+    return `<span class="badge ${v}" title="${esc(d.what)}">${esc(d.name)}: ${word}</span>`;
+  }).join("");
+  const manual = "https://archive.org/search?query=" + encodeURIComponent(`${g.title} ${s.name} manual`);
+  const shots = ["title", "snap"].filter((k) => g.art[k]).map((k) => `<img src="/media/${esc(g.art[k])}" alt="${k}">`).join("");
+  $("dlg").innerHTML = `<button class="close" id="x">CLOSE</button><div class="dlg">
+    <div class="box">${g.art.box ? `<img src="/media/${esc(g.art.box)}" alt="box art">` : ""}<div class="shots">${shots}</div></div>
+    <div><div class="sys">${esc(s.name)}</div><h2>${esc(g.title)}</h2>
+      <dl>${facts}</dl>
+      <h3>Plays on</h3><div class="plays">${plays}</div>
+      <a href="${manual}" target="_blank" rel="noopener">Find the manual ↗</a>
+      <h3>Files</h3><div class="files">${g.files.map(esc).join("\n")}</div></div></div>`;
+  $("x").onclick = () => $("dlg").close();
+  $("dlg").showModal();
+}
+
+function readHash() {
+  const p = new URLSearchParams(location.hash.slice(1));
+  for (const k of Object.keys(state)) if (p.get(k)) state[k] = p.get(k);
+  $("q").value = state.q; $("device").value = state.device; $("genre").value = state.genre; $("sort").value = state.sort;
+  chips();
+}
+function writeHash() {
+  const p = new URLSearchParams(Object.entries(state).filter(([k, v]) => v && !(k === "sort" && v === "title")));
+  history.replaceState(null, "", p.toString() ? "#" + p : location.pathname);
+}
+
+let timer;
+$("q").addEventListener("input", (e) => { clearTimeout(timer); timer = setTimeout(() => { state.q = e.target.value; render(); }, 120); });
+for (const k of ["device", "genre", "sort"]) $(k).addEventListener("change", (e) => { state[k] = e.target.value; render(); });
+$("systems").addEventListener("click", (e) => {
+  const c = e.target.closest(".chip"); if (!c) return;
+  state.system = c.dataset.s; chips(); render();
+});
+$("grid").addEventListener("click", (e) => { const c = e.target.closest(".card"); if (c) open(c.dataset.id); });
+$("grid").addEventListener("keydown", (e) => { if (e.key === "Enter") { const c = e.target.closest(".card"); if (c) open(c.dataset.id); } });
+$("more").addEventListener("click", more);
+new IntersectionObserver((es) => { if (es[0].isIntersecting && !$("more").hidden) more(); }).observe($("more"));
+load();
+</script>
+</body>
+</html>

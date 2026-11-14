@@ -1,0 +1,16 @@
+# The catalog and the art cache (~a few hundred MB). On brick2000 (local-path),
+# next to the ROMs it describes; kept if the app is deleted: the art is slow to
+# fetch again.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: games-data
+  namespace: games
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 10Gi

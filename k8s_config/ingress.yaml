@@ -1,0 +1,19 @@
+# Through the cluster's front door (brick-k8s-config front-door/: the host is
+# in Caddy's @apps list and the catalog has its tile).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: brick-games-web
+  namespace: games
+spec:
+  ingressClassName: traefik
+  rules:
+  - host: games.brick.nozdormu.cloud
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: brick-games-web
+            port: {number: 80}
