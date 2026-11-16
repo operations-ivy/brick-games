@@ -19,6 +19,8 @@ import sys
 import zipfile
 from pathlib import Path, PurePosixPath
 
+from typing import Any
+
 import yaml
 
 PROGRAMS = Path(__file__).with_name("dos_programs.yaml")
@@ -27,13 +29,20 @@ DOS_YML = "DOS.YML"
 DOS_NAME = re.compile(r"[^.\s]{1,8}(\.[^.\s]{1,3})?")
 
 
-Entry = str | dict  # a program, or {"program": ..., "dos_yml": {key: value}}
+Entry = str | dict[str, Any]  # a program, or {"program": ..., "dos_yml": {key: value}}
 
 
 def load_programs(path: Path = PROGRAMS) -> dict[str, Entry]:
     """Zip name (no .zip) -> the program to start (a path inside the zip),
     or a mapping with that `program` and extra `dos_yml` settings."""
-    return yaml.safe_load(path.read_text())
+    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+
+def program_of(entry: Entry) -> tuple[str, dict[str, Any]]:
+    """The entry's program and its DOS.YML settings."""
+    if isinstance(entry, str):
+        return entry, {}
+    return entry["program"], entry.get("dos_yml", {})
 
 
 def dos_yml_text(program: str, settings: dict) -> str:
@@ -59,8 +68,7 @@ def autoboot_line(program: str) -> str:
 
 def build(src: Path, dst: Path, entry: Entry) -> None:
     """Copy src to dst with AUTOBOOT.DBP starting the entry's program (and its DOS.YML)."""
-    program = entry if isinstance(entry, str) else entry["program"]
-    settings = {} if isinstance(entry, str) else entry.get("dos_yml", {})
+    program, settings = program_of(entry)
     replaced = {AUTOBOOT} | ({DOS_YML} if settings else set())
     with zipfile.ZipFile(src) as zin:
         infos = [i for i in zin.infolist() if i.filename.upper() not in replaced]
@@ -69,23 +77,33 @@ def build(src: Path, dst: Path, entry: Entry) -> None:
         if program.upper() not in files:
             raise ValueError(f"{src.name}: no {program} in the zip")
         tmp = dst.with_name(dst.name + ".part")
-        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
-            for info in infos:
-                name = info.filename[len(prefix):]
-                if not name:
-                    continue
-                out = zipfile.ZipInfo(name, info.date_time)
-                out.compress_type = zipfile.ZIP_DEFLATED
-                out.external_attr = info.external_attr
-                if info.is_dir():
-                    zout.writestr(out, b"")
-                    continue
-                with zin.open(info) as fin, zout.open(out, "w") as fout:
-                    shutil.copyfileobj(fin, fout, 1 << 20)
-            zout.writestr(AUTOBOOT, autoboot_line(program))
-            if settings:
-                zout.writestr(DOS_YML, dos_yml_text(program, settings))
+        try:
+            _write(zin, tmp, infos, prefix, program, settings)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
         tmp.replace(dst)
+
+
+def _write(zin: zipfile.ZipFile, tmp: Path, infos: list[zipfile.ZipInfo], prefix: str,
+           program: str, settings: dict[str, Any]) -> None:
+    """Write the copy of the zip, then AUTOBOOT.DBP and DOS.YML, to tmp."""
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
+        for info in infos:
+            name = info.filename[len(prefix):]
+            if not name:
+                continue
+            out = zipfile.ZipInfo(name, info.date_time)
+            out.compress_type = zipfile.ZIP_DEFLATED
+            out.external_attr = info.external_attr
+            if info.is_dir():
+                zout.writestr(out, b"")
+                continue
+            with zin.open(info) as fin, zout.open(out, "w") as fout:
+                shutil.copyfileobj(fin, fout, 1 << 20)
+        zout.writestr(AUTOBOOT, autoboot_line(program))
+        if settings:
+            zout.writestr(DOS_YML, dos_yml_text(program, settings))
 
 
 def build_all(src: Path, dst: Path, programs: dict[str, Entry]) -> list[str]:

@@ -105,5 +105,15 @@ def test_programs_file_loads():
     programs = dos.load_programs()
     assert programs
     for entry in programs.values():
-        program = entry if isinstance(entry, str) else entry["program"]
+        program, settings = dos.program_of(entry)
         assert isinstance(program, str) and program
+        assert isinstance(settings, dict)
+
+
+def test_failed_build_leaves_no_partial_file(tmp_path, monkeypatch):
+    src, dst = tmp_path / "a.zip", tmp_path / "b.zip"
+    make_zip(src, ["GAME.EXE"])
+    monkeypatch.setattr(dos, "autoboot_line", lambda program: 1 / 0)
+    with pytest.raises(ZeroDivisionError):
+        dos.build(src, dst, "GAME.EXE")
+    assert list(tmp_path.iterdir()) == [src]
