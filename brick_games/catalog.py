@@ -26,6 +26,7 @@ import json
 import re
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 import brick_observe
 import yaml
@@ -39,7 +40,18 @@ SYSTEMS_FILE = Path(__file__).with_name("systems.yaml")
 # samples), and screens ~9 KB instead of ~40 KB. Box art is drawn at most
 # ~300 px wide; screens at their own size (320x224 and the like).
 ART_FORMAT = "avif"
-ART_SIZES = {"Named_Boxarts": (300, 50), "Named_Titles": (400, 60), "Named_Snaps": (400, 60)}  # kind: (px, quality)
+
+
+class ArtSpec(NamedTuple):
+    size: int  # the longest side, px
+    quality: int  # AVIF quality, 0-100
+
+
+ART_SIZES = {
+    "Named_Boxarts": ArtSpec(300, 50),
+    "Named_Titles": ArtSpec(400, 60),
+    "Named_Snaps": ArtSpec(400, 60),
+}
 ART_VERSION_LEN = 8
 WORKERS = 8
 # A failed download or a bad picture: OSError covers URLError, timeouts and PIL's
@@ -120,12 +132,12 @@ def slug(system_id: str, key: str) -> str:
 
 def shrink(picture: bytes, kind: str) -> bytes:
     """The picture as a small AVIF for the page."""
-    size, quality = ART_SIZES[kind]
+    spec = ART_SIZES[kind]
     with Image.open(io.BytesIO(picture)) as im:
         im.load()
-        im.thumbnail((size, size))
+        im.thumbnail((spec.size, spec.size))
         out = io.BytesIO()
-        im.convert("RGBA" if im.mode in ("RGBA", "LA", "P") else "RGB").save(out, "AVIF", quality=quality)
+        im.convert("RGBA" if im.mode in ("RGBA", "LA", "P") else "RGB").save(out, "AVIF", quality=spec.quality)
         return out.getvalue()
 
 
@@ -142,6 +154,25 @@ def write_art(dest: Path, picture: bytes) -> None:
     tmp.replace(dest)
 
 
+def convert_cached_png(dest: Path, kind: str) -> bytes | None:
+    """The PNG cached before AVIF (dest as .png) converted to dest, so it isn't
+    downloaded again; None when there's none or it can't be read."""
+    old = dest.with_suffix(".png")
+    try:
+        small = shrink(old.read_bytes(), kind)
+    except FileNotFoundError:
+        return None
+    except FETCH_ERRORS as e:
+        log.warning("cached art unreadable; fetching it again", file=str(old), error=str(e))
+        return None
+    write_art(dest, small)
+    try:
+        old.unlink(missing_ok=True)
+    except OSError as e:  # the AVIF is written; a stale PNG only wastes space
+        log.warning("old art not removed", file=str(old), error=str(e))
+    return small
+
+
 def get_art(media: Path, system: dict, kind: str, thumb: str, dest_name: str) -> tuple[str | None, str | None]:
     """Fetch (once) and keep one picture: (its URL under /media/, versioned by
     its content, or None; the fetch result for Stats or None when it was
@@ -152,14 +183,7 @@ def get_art(media: Path, system: dict, kind: str, thumb: str, dest_name: str) ->
         return versioned(rel, dest.read_bytes()), None
     except FileNotFoundError:
         pass
-    old = dest.with_suffix(".png")  # cached before AVIF: convert it, don't download again
-    try:
-        small = shrink(old.read_bytes(), kind)
-    except (FileNotFoundError, *FETCH_ERRORS):
-        pass
-    else:
-        write_art(dest, small)
-        old.unlink()
+    if small := convert_cached_png(dest, kind):
         return versioned(rel, small), "converted"
     try:
         data = sources.fetch_thumb(system["libretro"], kind, thumb)

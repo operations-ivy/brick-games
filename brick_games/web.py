@@ -38,7 +38,7 @@ from prometheus_client import Counter
 
 log = brick_observe.get_logger(__name__)
 PAGE_FILE = Path(__file__).parent / "static" / "index.html"
-MEDIA_PATH = re.compile(r"^/media/([a-z0-9]+/Named_(?:Boxarts|Titles|Snaps)/[0-9a-f]{16}\.(avif|png))$")
+MEDIA_PATH = re.compile(r"^/media/(?P<rel>[a-z0-9]+/Named_(?:Boxarts|Titles|Snaps)/[0-9a-f]{16}\.(?P<ext>avif|png))$")
 MEDIA_TYPES = {"avif": "image/avif", "png": "image/png"}
 REQUESTS = Counter("games_web_requests_total", "Requests, by route and status", ["route", "status"])
 SENT_BYTES = Counter("games_web_response_bytes_total", "Body bytes sent, by route and content encoding",
@@ -193,7 +193,7 @@ class Handler(BaseHTTPRequestHandler):
             route(self, path)
         elif m := MEDIA_PATH.match(path):
             # parse_qs drops blank values: a bare ?v= is not a versioned URL.
-            self._media(m.group(1), MEDIA_TYPES[m.group(2)], "v" in parse_qs(query))
+            self._media(m["rel"], MEDIA_TYPES[m["ext"]], "v" in parse_qs(query))
         else:
             self._respond(404, b"not found", "text/plain", "other")
 

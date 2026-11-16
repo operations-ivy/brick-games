@@ -112,7 +112,7 @@ def test_scan_groups_games_fetches_art_and_writes_the_catalog(tmp_path, offline)
     box, _, version = ff["art"]["box"].partition("?v=")
     assert box.endswith(".avif") and (data / "media" / box).exists()
     with Image.open(data / "media" / box) as im:
-        assert im.format == "AVIF" and max(im.size) <= catalog.ART_SIZES["Named_Boxarts"][0]
+        assert im.format == "AVIF" and max(im.size) <= catalog.ART_SIZES["Named_Boxarts"].size
     # the art's URL carries its content hash, and a cached picture keeps it
     assert version == hashlib.sha256((data / "media" / box).read_bytes()).hexdigest()[:catalog.ART_VERSION_LEN]
     # two discs, one game
