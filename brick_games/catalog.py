@@ -35,7 +35,11 @@ from . import sources
 
 log = brick_observe.get_logger(__name__)
 SYSTEMS_FILE = Path(__file__).with_name("systems.yaml")
-ART_SIZE = 400
+# AVIF: a box art scan is ~8 KB instead of ~180 KB as PNG (2026-11-16, 60
+# samples), and screens ~9 KB instead of ~40 KB. Box art is drawn at most
+# ~300 px wide; screens at their own size (320x224 and the like).
+ART_FORMAT = "avif"
+ART_SIZES = {"Named_Boxarts": (300, 50), "Named_Titles": (400, 60), "Named_Snaps": (400, 60)}  # kind: (px, quality)
 ART_VERSION_LEN = 8
 WORKERS = 8
 # A failed download or a bad picture: OSError covers URLError, timeouts and PIL's
@@ -48,7 +52,7 @@ class Stats:
 
     def __init__(self) -> None:
         self.per_system: dict[str, dict[str, int]] = {}
-        self.fetches = {"ok": 0, "missing": 0, "error": 0}
+        self.fetches = {"ok": 0, "missing": 0, "error": 0, "converted": 0}
 
     def fetched(self, result: str) -> None:
         self.fetches[result] += 1
@@ -114,40 +118,55 @@ def slug(system_id: str, key: str) -> str:
     return hashlib.sha1(f"{system_id}/{key}".encode()).hexdigest()[:16]
 
 
-def shrink(png: bytes) -> bytes:
-    with Image.open(io.BytesIO(png)) as im:
+def shrink(picture: bytes, kind: str) -> bytes:
+    """The picture as a small AVIF for the page."""
+    size, quality = ART_SIZES[kind]
+    with Image.open(io.BytesIO(picture)) as im:
         im.load()
-        im.thumbnail((ART_SIZE, ART_SIZE))
+        im.thumbnail((size, size))
         out = io.BytesIO()
-        im.convert("RGBA" if im.mode in ("RGBA", "LA", "P") else "RGB").save(out, "PNG", optimize=True)
+        im.convert("RGBA" if im.mode in ("RGBA", "LA", "P") else "RGB").save(out, "AVIF", quality=quality)
         return out.getvalue()
 
 
-def versioned(rel: str, png: bytes) -> str:
+def versioned(rel: str, picture: bytes) -> str:
     """The art's URL path with a content hash, so the page can cache it for
     good (web.py's MEDIA_IMMUTABLE): changed art gets a new URL."""
-    return f"{rel}?v={hashlib.sha256(png).hexdigest()[:ART_VERSION_LEN]}"
+    return f"{rel}?v={hashlib.sha256(picture).hexdigest()[:ART_VERSION_LEN]}"
+
+
+def write_art(dest: Path, picture: bytes) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(".part")
+    tmp.write_bytes(picture)
+    tmp.replace(dest)
 
 
 def get_art(media: Path, system: dict, kind: str, thumb: str, dest_name: str) -> tuple[str | None, str | None]:
     """Fetch (once) and keep one picture: (its URL under /media/, versioned by
     its content, or None; the fetch result for Stats or None when it was
     already cached). Runs in worker threads, so the caller does the counting."""
-    rel = f"{system['id']}/{kind}/{dest_name}.png"
+    rel = f"{system['id']}/{kind}/{dest_name}.{ART_FORMAT}"
     dest = media / rel
     try:
         return versioned(rel, dest.read_bytes()), None
     except FileNotFoundError:
         pass
+    old = dest.with_suffix(".png")  # cached before AVIF: convert it, don't download again
+    try:
+        small = shrink(old.read_bytes(), kind)
+    except (FileNotFoundError, *FETCH_ERRORS):
+        pass
+    else:
+        write_art(dest, small)
+        old.unlink()
+        return versioned(rel, small), "converted"
     try:
         data = sources.fetch_thumb(system["libretro"], kind, thumb)
         if not data:
             return None, "missing"
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        tmp = dest.with_suffix(".part")
-        small = shrink(data)
-        tmp.write_bytes(small)
-        tmp.replace(dest)
+        small = shrink(data, kind)
+        write_art(dest, small)
         return versioned(rel, small), "ok"
     except FETCH_ERRORS as e:  # one picture; the rest go on
         log.warning("art fetch failed", system=system["id"], kind=kind, error=str(e))

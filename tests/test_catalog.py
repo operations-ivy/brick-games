@@ -110,9 +110,9 @@ def test_scan_groups_games_fetches_art_and_writes_the_catalog(tmp_path, offline)
     ff = by_title["Final Fight"]
     assert len(ff["files"]) == 2 and ff["year"] == "1991" and ff["genre"] == "Beat'em up"
     box, _, version = ff["art"]["box"].partition("?v=")
-    assert box.endswith(".png") and (data / "media" / box).exists()
+    assert box.endswith(".avif") and (data / "media" / box).exists()
     with Image.open(data / "media" / box) as im:
-        assert max(im.size) <= catalog.ART_SIZE
+        assert im.format == "AVIF" and max(im.size) <= catalog.ART_SIZES["Named_Boxarts"][0]
     # the art's URL carries its content hash, and a cached picture keeps it
     assert version == hashlib.sha256((data / "media" / box).read_bytes()).hexdigest()[:catalog.ART_VERSION_LEN]
     # two discs, one game
@@ -163,6 +163,19 @@ def fetch(url):
         return e.code, e.read()
 
 
+def test_cached_png_art_is_converted_not_downloaded(tmp_path, monkeypatch):
+    media = tmp_path / "media"
+    old = media / "snes" / "Named_Titles" / "0123456789abcdef.png"
+    old.parent.mkdir(parents=True)
+    old.write_bytes(png(320, 224))
+    monkeypatch.setattr(sources, "fetch_thumb", lambda *a: pytest.fail("downloaded again"))
+    rel, result = catalog.get_art(media, {"id": "snes", "libretro": "x"}, "Named_Titles", "T.png", "0123456789abcdef")
+    assert result == "converted" and rel.startswith("snes/Named_Titles/0123456789abcdef.avif?v=")
+    assert not old.exists()
+    with Image.open(media / rel.partition("?")[0]) as im:
+        assert im.format == "AVIF" and im.size == (320, 224)  # screens keep their size
+
+
 def test_web_serves_page_catalog_and_media_only(server):
     base, data = server
     assert fetch(base + "/")[0] == 200
@@ -175,6 +188,10 @@ def test_web_serves_page_catalog_and_media_only(server):
     pic.parent.mkdir(parents=True)
     pic.write_bytes(png(10, 10))
     assert fetch(base + "/media/snes/Named_Boxarts/0123456789abcdef.png")[0] == 200
+    avif = pic.with_suffix(".avif")
+    avif.write_bytes(catalog.shrink(png(10, 10), "Named_Boxarts"))
+    with urllib.request.urlopen(base + "/media/snes/Named_Boxarts/0123456789abcdef.avif") as r:
+        assert r.headers["Content-Type"] == "image/avif" and r.read() == avif.read_bytes()
     for bad in ("/media/../catalog.json", "/media/snes/Named_Boxarts/../../catalog.json", "/media/x.png", "/etc/passwd"):
         assert fetch(base + bad)[0] == 404
     assert fetch(base + "/metrics")[0] == 200
