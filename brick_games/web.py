@@ -190,6 +190,7 @@ class Handler(BaseHTTPRequestHandler):
         if route := ROUTES.get(path):
             route(self, path)
         elif m := MEDIA_PATH.match(path):
+            # parse_qs drops blank values: a bare ?v= is not a versioned URL.
             self._media(m.group(1), "v" in parse_qs(query))
         else:
             self._respond(404, b"not found", "text/plain", "other")

@@ -202,6 +202,15 @@ def load_fbneo() -> tuple[dict, dict]:
     return titles, parents
 
 
+def unchanged(path: Path, catalog: dict) -> bool:
+    """Whether the catalog on disk says the same as this one, apart from when it was made."""
+    try:
+        old = json.loads(path.read_text())
+        return {**old, "generated": None} == {**catalog, "generated": None}
+    except (OSError, ValueError, TypeError):  # missing, unreadable, or not a catalog
+        return False
+
+
 def scan(root: Path, data: Path, stats: Stats | None = None) -> dict:
     stats = stats or Stats()
     config = load_systems()
@@ -229,11 +238,3 @@ def scan(root: Path, data: Path, stats: Stats | None = None) -> dict:
     log.info("catalog written", games=len(games), systems=len(systems))
     return catalog
 
-
-def unchanged(path: Path, catalog: dict) -> bool:
-    """Whether the catalog on disk says the same as this one, apart from when it was made."""
-    try:
-        old = json.loads(path.read_text())
-    except (OSError, ValueError):
-        return False
-    return {**old, "generated": None} == {**catalog, "generated": None}
