@@ -88,3 +88,34 @@ release bumps `version` in `pyproject.toml` and `newTag` in
 - **Network:** default-deny. The scan reaches only DNS, traces, the
   Pushgateway and HTTPS to the internet (private ranges excluded). The page
   is reachable only from Traefik and Prometheus.
+
+## DOS games
+
+brick9000 and the RG476H play DOS games with DOSBox Pure, one zip per game,
+and neither has a keyboard. `brick_games/dos.py` makes each zip start its game
+straight away (brick-games#5): it copies the zip with an `AUTOBOOT.DBP`, the
+file DOSBox Pure's own "auto start" option writes, naming the program from
+`brick_games/dos_programs.yaml`. An entry with `dos_yml` also gets a `DOS.YML`
+with those DOSBox Pure settings (`cpu_cycles`, `mem_ems`, `run_input`).
+
+```sh
+python3 -m brick_games.dos SRC DST   # SRC untouched; unlisted zips are copied unchanged
+```
+
+On brick2000 (2026-11-16): `/extra/games/roms/dos` is the built set and
+`/extra/games/dos-original` the zips as they came. Games that came packed
+(floppy installers, split archives) were installed once into
+`/extra/games/dos-work/fixed/<name>/` and zipped from there: from other copies
+in `/extra/games/dos-collection`, with 7z, or by running the game's own
+installer headless in DOSBox Pure. Every listed pick was booted headless in
+DOSBox Pure and checked from a screenshot.
+
+The 23 games not listed don't start as they are and keep the start menu: CD
+games without a CD image (Full Throttle, Loom CD, Rayman, Dark Forces, Arena,
+Crusader No Remorse, Stonekeep), files missing from the zip (Aces of the
+Pacific, Raptor, Pirates Gold, Wizardry 7, Strike Commander, Might and Magic 3
+disk 2), and a few that need more digging (Albion, Commander Keen 1, F-117A,
+Fallout's paths, Screamer and Toonstruck's DOS/4GW, Privateer and Zone 66's
+memory, Theme Park, Crystal Caves). Some listed games still stop once for a
+key, a sound setup or a manual question; DOSBox Pure's on-screen keyboard is
+on L3.

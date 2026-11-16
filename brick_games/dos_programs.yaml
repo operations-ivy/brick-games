@@ -1,0 +1,248 @@
+# The program DOSBox Pure starts for each DOS game (brick-games#5), as a path
+# inside the game's zip. `python3 -m brick_games.dos SRC DST` writes it into
+# each zip as AUTOBOOT.DBP; an entry with dos_yml also gets a DOS.YML with
+# those settings (CPU speed, memory, keys to press). Every pick was booted
+# headless in DOSBox Pure (2026-11-16). Games not listed keep the start menu:
+# they don't start as they are (missing CD, missing files; README, "DOS games").
+1942 The Pacific Air War (1994): 1942.EXE
+Abuse (1995): abuse.exe
+Adventures Of Captain Comic (1988): comic.exe
+Al-Qadim The Genie's Curse (1994): genier.exe
+Alien Carnage (1993): alien.exe
+Alley Cat (1984): allycat.exe
+Alone In The Dark (1992):
+  dos_yml:
+    run_input: (WAIT:3000)(F1)
+  program: ALONECRK.COM
+Alone In The Dark 2 (1994): aitd2.exe
+Alone In The Dark 3 (1995): aitd3.exe
+Another World (1991): another.exe
+Anvil Of Dawn (1995): ANVIL.EXE
+Apache Longbow (1995): APACHE.EXE
+Ascendancy (1995): ascend.exe
+Beneath A Steel Sky (1993): sky.exe
+Betrayal At Krondor (1993): krondor.exe
+Bio Menace Compilation (1993): bmenace1.exe
+Blake Stone Aliens Of Gold (1993): bs_aog.exe
+Blood (1997): blood.exe
+Carmageddon (1997): CARMA.EXE
+Catacomb 3D - The Descent (aka A New Dimension) (1991): CAT3D.EXE
+Catacomb Abyss (1992): catabyss.exe
+Champions Of Krynn (1990): start.exe
+Chuck Yeagers Air Combat (1991): play.bat
+Comanche Maximum Overkill (1992): COMANCHE.EXE
+Command & Conquer (1995): C&C.BAT
+Command & Conquer Red Alert (1996): ALLIES.BAT
+Commander Keen 2 The Earth Explodes (1990): keen2.exe
+Commander Keen 3 Keen Must Die (1990): keen3.exe
+Commander Keen 4 Secret Of The Oracle (1991): keen4e.exe
+Commander Keen 5 The Armageddon Machine (1991): keen5e.exe
+Commander Keen 6 Aliens Ate My Baby Sitter (1991): keen6.exe
+Commander Keen Dreams (1992): kdreams.exe
+Conquests Of Camelot The Search For The Grail (1990): sierra.com
+Conquests Of The Longbow The Legend Of Robin Hood (1993): robin3.bat
+Cosmos Cosmic Adventure Forbidden Planet (1992): cosmiccr.exe
+Crusader No Regret (1996): regret.exe
+Curse Of The Azure Bonds (1989): start.exe
+Dangerous Dave (1990): DAVE.EXE
+Dark Sun Shattered Lands (1993): dsun.exe
+Darklands (1992): darkland.exe
+Death Rally (1996): rally.exe
+Descent (1995): DESCENT.EXE
+Descent II (1996): DESCENT2.EXE
+Destruction Derby (1996): dd.exe
+Digger (1983): digger.com
+Discworld (1995): disc.bat
+Doom (1993): DOOM.EXE
+Doom II Hell On Earth (1994): DOOM2.EXE
+Duke Nukem 2 (1991): nukem2.exe
+Duke Nukem 3D Atomic Edition 1.4 (1996): duke3d.exe
+Duke Nukem Compilation 2.0 (1991): dn1.exe
+Dune CD (1992): DUNECD/dncdprg.exe
+Dune II The Building Of A Dynasty (1992): DUNE2.EXE
+Dungeon Master (1988): dm.exe
+EF 2000 (1995): EF2000.BAT
+Epic Pinball (1993): pinball.exe
+Eye Of The Beholder (1990): START1.EXE
+Eye Of The Beholder II The Legend Of Darkmoon (1991): START.EXE
+Eye of the Beholder III The Assault On Myth Drannor (1992): start.bat
+F15 Strike Eagle II (1989): f15.com
+F15 Strike Eagle III (1993): f15.com
+F19 Stealth Fighter (1987): f19.com
+Falcon 3.0 (1991): falcon3.exe
+Final Doom (1996): tnt/DOOM2.EXE
+Flashback The Quest for Identity (1993): fb100.exe
+Freddy Pharkas Frontier Pharmacist CD (1993): FPFPCD.BAT
+Frontier Elite II (1993): frontier.exe
+Gabriel Knight Sins Of The Fathers CD (1993): GKCD.BAT
+Gobliins 2 The Prince Buffoon (1992): go.bat
+Goblins 1 (1991): go.bat
+God Of Thunder (1993): got.exe
+Gunship (1986): gs.com
+Gunship 2000 (1991): gs2000.com
+Halloween Harry (1993): hh1.exe
+Heretic Shadow Of The Serpent Riders (1996): HERETIC.EXE
+Heroes Of Might And Magic (1995): heroes.exe
+Hexen Beyond Heretic (1995): hexen.exe
+Hocus Pocus (1994): hocus.exe
+Indiana Jones And The Last Crusade The Graphic Adventure (1989):
+  dos_yml:
+    cpu_cycles: 1320
+  program: indy256.exe
+Indiana Jones And the Fate of Atlantis CD (1993): ATLANTIS.EXE
+Ishar 2 Messengers Of Doom (1993): start.exe
+Ishar Legend Of The Fortress (1992): start.exe
+Jagged Alliance (1994): ja.exe
+Jazz Jackrabbit CD-ROM (1994): JAZZ.EXE
+Jill Of The Jungle The Complete Trilogy (1993): jill1.exe
+King's Quest II Romancing The Throne (1985): sierra.com
+King's Quest III To Heir Is Human (1986): king.com
+King's Quest Iv The Perils Of Rosella (1988): sierra.exe
+King's Quest V Absence Makes The Heart Go Yonder (1990): kq54.bat
+King's Quest VI Heir Today Gone Tomorrow CD (1994): KQ6.BAT
+King's Quest VII The Princeless Bride (1994): KQ7.BAT
+Kings Bounty (1990): kb.exe
+Kings Quest (1984): kq1.com
+Lands Of Lore The Throne Of Chaos (1993): lands.exe
+Laura Bow The Dagger of Amon Ra CD (1992): RA.BAT
+Leisure Suit Larry 6 Shape Up Or Slip Out CD (1994): LSL6CD.BAT
+Leisure Suit Larry III Passionate Patti In Pursuit Of The Pulsating Pectorals (1989): larry3.com
+Leisure Suit Larry In The Land Of The Lounge Lizards Remake (1991): sierra.bat
+Lemmings 2 The Tribes (1993): l2.com
+Lhx Attack Chopper (1990): lhx.exe
+Little Big Adventure (1994): lba.exe
+Lords Of The Realm (1994): lords.exe
+Lure Of The Temptress (1992): LURE.EXE
+Magic Carpet 2 The Netherworlds (1995): netherw.exe
+Magic Carpet Plus (1995): carpet.exe
+Major Stryker (1993): stryker.exe
+Maniac Mansion (1988): maniac.exe
+Maniac Mansion - Day Of The Tentacle Talkie (1993): DOTT/TENTACLE.EXE
+Master Of Magic (1993): magic.exe
+Master Of Orion (1992): orion.exe
+Master Of Orion 2 Battle At Antares (1996): orion2.exe
+MechWarrior 2 31st Century Combat (1995): MECH2DOS.bat
+Mega Lo Mania (1992): mega.exe
+Menzoberranzan (1994): MENZO.BAT
+Micro Machines (1994): micro.exe
+Might And Magic World Of Xeen (1994): XEEN.EXE
+Monkey Island 2 Lechucks Revenge (1991): monkey2.exe
+Monster Bash Episode 1 To 3 (1993): bash2.exe
+Number Munchers (1990): nm.exe
+One Must Fall 2097 (1994): FILE0001.EXE
+Panzer General (1994): PG.BAT
+Paratrooper (1982): ptrooper.com
+Phantasmagoria (1995): PHCD/PHCD.BAT
+Pinball Fantasies (1992): pinball.exe
+Police Quest 2 The Vengeance (1988): sierra.exe
+Police Quest 3 The Kindred (1991): pq3.bat
+Police Quest 4 Open Season CD (1994): PQ4CD.BAT
+Police Quest In Pursuit Of The Death Angel Vga (1987): pq.bat
+Pool Of Radiance (1988): start.exe
+Populous (1989): popvga3.bat
+Prince Of Persia 1.3 (1989): prince.exe
+Prince Of Persia 2 The Shadow And The Flame (1993): prince.exe
+Quake (1996): quake.exe
+Quest For Glory I So You Want To Be A Hero Vga (1992): hero.bat
+Quest For Glory II Trial By Fire (1990): sierra.com
+Quest For Glory III Wages Of War (1992): sierra.exe
+Quest for Glory Shadows of Darkness CD (1994): QG4CD.BAT
+Railroad Tycoon Deluxe (1993): rdx.bat
+Realms Of Arkania Blade Of Destiny (1992): bladem.exe
+Red Baron (1990): baron.com
+Rise Of The Triad Dark War (1994): rott.exe
+Sam And Max Hit the Road CDROM (1993): sam.exe
+Scorched Earth (1995): scorch.exe
+Secret Agent - Mission 3 (1993): SAM3.EXE
+Secret Agent Mission 1 (1992): sam1.exe
+Secret Agent Mission 2 (1992): sam2.exe
+Secret Of Monkey Island Vga (1990):
+  dos_yml:
+    cpu_cycles: 3000
+  program: monkey.exe
+Secret Weapons of the Luftwaffe CD (1992): sw.bat
+Settlers (1993): settlers.bat
+Settlers 2 Gold Edition (1997): s2.exe
+Shadow Warrior (1997): sw.exe
+Sid Meiers Civilization (1991): civ.exe
+Sid Meiers Colonization (1994): colonize.bat
+Silent Service II (1990): ss2.exe
+SimCity 2000 CD Collection (1993): SC2000.BAT
+Simon The Sorcerer (1993): simon.bat
+Simon The Sorcerer 2 (1995): SIMON2.BAT
+Skyroads (1993): skyroads.exe
+Space Quest 6 Roger Wilco in the Spinal Frontier (1995): SQ6.BAT
+Space Quest I Roger Wilco In The Sarien Encounter Enhance (1991): sierra.bat
+Space Quest II Chapter II Vohauls Revenge (1987): sierra.com
+Space Quest III The Pirates Of Pestulon (1989): sierra.com
+Space Quest IV Roger Wilco And The Time Rippers (1991): sierra.bat
+Space Quest V The Next Mutation (1993): sq5.bat
+Spear Of Destiny (1992): spear.exe
+Star Control II (1992): STARCON2.EXE
+Star Trek 25th Anniversary CD (1992): TREKCD/STARTREK.EXE
+Star Wars TIE Fighter Collector's CD-ROM (1995): TIECD/TIE.EXE
+Star Wars X Wing (1993): xwing.exe
+Starflight (1986): starflt.com
+Stargunner (1996): stargun.exe
+Strife (1996): strife1.exe
+Stunts 1.1 (1990): stunts.com
+Supaplex (1991): supaplex.exe
+Super Solvers Challenge Of The Ancient Empires! (1990): AE.BAT
+Super Solvers Midnight Rescue (1989): SSR.EXE
+Super Solvers Outnumbered (1990): SSO.EXE
+Super Solvers Spellbound! (1990): ssbprog.exe
+Super Solvers Treasure Mountain (1989): sst.exe
+Syndicate Plus (1994): SYND.EXE
+Syndicate Wars (1996): play.bat
+System Shock (1994): sshock.exe
+Terminal Velocity (1995): tv.exe
+The 7th Guest (1993): T7G/T7G.BAT
+The Bard's Tale (1985): bard.exe
+The Chaos Engine (1994): CHAOS.EXE
+The Dig (1995): DIG.BAT
+The Elder Scrolls II Daggerfall (1996): DAGGER/NoCD.bat
+The Incredible Machine 2 (1994): TIM2.EXE
+The Legend Of Kyrandia 1 (1992): kyrandia.bat
+The Legend Of Kyrandia 2 Hand Of Fate (1993): hof.exe
+The Legend Of Kyrandia Book 3 Malcolm's Revenge (1994): MAIN.EXE
+The Lost Vikings (1992): vikings.exe
+The Need For Speed Special Edition (1996): NFS.EXE
+The Oregon Trail Deluxe (1992): OREGON.EXE
+The Ultimate Doom (1995): DOOM.EXE
+Theme Hospital (1997): HOSPITAL.EXE
+Tomb Raider (1996): TOMB.EXE
+Transport Tycoon Deluxe (1995): tycoon.bat
+Twinsens Odyssey (1997): LBA.EXE
+Tyrian (1995): tyrian.exe
+Ultima 4 Quest Of The Avatar (1985): ultima.com
+Ultima 6 The False Prophet (1990): ultima6.com
+Ultima 7 Part 2 Serpent Isle And The Silver Seed (1993):
+  dos_yml:
+    mem_ems: 'false'
+  program: serpent.com
+Ultima 7 The Black Gate And Forge Of Virtue (1992):
+  dos_yml:
+    mem_ems: 'false'
+  program: ultima7.com
+Ultima 8 Pagan (1994): u8.exe
+Ultima Underworld 1 The Stygian Abyss (1992): uw.exe
+Ultima Underworld 2 Labyrinth Of Worlds (1992): uw2.exe
+Ultima V Warriors Of Destiny (1988): ultima.exe
+Ultima Worlds of Adventure 2 Martian Dreams (1991): martian.exe
+Wacky Wheels (1994): ww.exe
+Warcraft 2 Tides Of Darkness (1995): war2.exe
+Warcraft Orcs And Humans 1.2 (1994): war.exe
+Warlords II Deluxe (1995): WAR2NS.BAT
+Wasteland (1987): wl.exe
+Where In The World Is Carmen Sandiego Deluxe Edition (1990): carmen.exe
+Where In Time Is Carmen Sandiego (1989): carmen.exe
+Wing Commander (1990): wc.exe
+Wing Commander 2 Vengeance Of The Kilrathi (1991): wc2.exe
+Wizardry 6 Bane Of The Cosmic Forge (1990): playbane.bat
+Wolfenstein 3D (1992): WOLF3D.EXE
+Word Rescue (1992): wr2.exe
+X Com 2 Terror From The Deep (1995): go.com
+X Com Ufo Defense (1994): go.bat
+Xargon (1993): xrfile00.bat
+Xenon 2 Megablast (1990): xenon2.exe
+Zak Mckracken And The Alien Mindbenders (1988): zak.exe
