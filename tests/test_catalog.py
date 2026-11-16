@@ -1,3 +1,5 @@
+import gzip
+import hashlib
 import io
 import json
 import threading
@@ -107,9 +109,12 @@ def test_scan_groups_games_fetches_art_and_writes_the_catalog(tmp_path, offline)
     # two regions of one game, one entry; the .txt ignored
     ff = by_title["Final Fight"]
     assert len(ff["files"]) == 2 and ff["year"] == "1991" and ff["genre"] == "Beat'em up"
-    assert ff["art"]["box"].endswith(".png") and (data / "media" / ff["art"]["box"]).exists()
-    with Image.open(data / "media" / ff["art"]["box"]) as im:
+    box, _, version = ff["art"]["box"].partition("?v=")
+    assert box.endswith(".png") and (data / "media" / box).exists()
+    with Image.open(data / "media" / box) as im:
         assert max(im.size) <= catalog.ART_SIZE
+    # the art's URL carries its content hash, and a cached picture keeps it
+    assert version == hashlib.sha256((data / "media" / box).read_bytes()).hexdigest()[:catalog.ART_VERSION_LEN]
     # two discs, one game
     assert by_title["Shenmue"]["discs"] == 2
     # a clone grouped under its parent, and the BIOS left out
@@ -120,8 +125,12 @@ def test_scan_groups_games_fetches_art_and_writes_the_catalog(tmp_path, offline)
     assert json.loads((data / "catalog.json").read_text())["games"] == cat["games"]
     # a second scan downloads nothing again
     before = dict(stats.fetches)
-    catalog.scan(roms, data, stats)
+    written = (data / "catalog.json").stat().st_mtime_ns
+    again = catalog.scan(roms, data, stats)
+    # nothing changed, so the file (and the page's ETag) is left as it was
+    assert (data / "catalog.json").stat().st_mtime_ns == written
     assert stats.fetches == before
+    assert {g["title"]: g["art"] for g in again["games"]}["Final Fight"] == ff["art"]
 
 
 def test_scan_without_network_still_lists_games(tmp_path, monkeypatch):
@@ -188,3 +197,83 @@ def test_publish_sends_each_count_as_a_gauge():
     publish(run, stats)
     assert ("games_catalog_games", 1, {"system": "snes"}) in run.gauges
     assert ("games_art_fetches", 1, {"result": "ok"}) in run.gauges
+
+
+def get(url, headers=None, method="GET"):
+    """(status, headers, body) without urllib's own error handling."""
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=headers or {}, method=method)) as r:
+            return r.status, r.headers, r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.headers, e.read()
+
+
+def test_catalog_has_validators_gzip_and_304s(server):
+    base, data = server
+    body = json.dumps({"games": [{"title": f"Game {i}"} for i in range(500)]}).encode()
+    (data / "catalog.json").write_bytes(body)
+    status, h, got = get(base + "/api/catalog")
+    assert (status, got) == (200, body)
+    etag, modified = h["ETag"], h["Last-Modified"]
+    assert etag.startswith('"') and h["Cache-Control"] == "no-cache" and h["Vary"] == "Accept-Encoding"
+    assert "Content-Encoding" not in h
+    # gzip for clients that take it, a different ETag for that representation
+    status, hz, got = get(base + "/api/catalog", {"Accept-Encoding": "br, gzip"})
+    assert status == 200 and hz["Content-Encoding"] == "gzip" and gzip.decompress(got) == body
+    assert hz["ETag"] != etag and int(hz["Content-Length"]) == len(got) < len(body)
+    assert get(base + "/api/catalog", {"Accept-Encoding": "gzip;q=0, *"})[1]["Content-Encoding"] is None
+    # either ETag, or the date, revalidates
+    for cond in ({"If-None-Match": etag}, {"If-None-Match": hz["ETag"]}, {"If-None-Match": f'"x", W/{etag}'},
+                 {"If-Modified-Since": modified}):
+        status, h304, got = get(base + "/api/catalog", cond)
+        assert (status, got) == (304, b"") and h304["ETag"] == etag
+    # If-None-Match wins over a date that alone would be a 304
+    assert get(base + "/api/catalog", {"If-None-Match": '"other"', "If-Modified-Since": modified})[0] == 200
+    # a new catalog (renamed into place, as the scan does) is a new ETag and a 200
+    new = data / ".catalog.json.part"
+    new.write_bytes(body.replace(b"Game 1", b"Game X"))
+    new.replace(data / "catalog.json")
+    status, h2, got = get(base + "/api/catalog", {"If-None-Match": etag})
+    assert status == 200 and h2["ETag"] != etag and b"Game X" in got
+    # HEAD: the same headers, no body
+    status, hh, got = get(base + "/api/catalog", method="HEAD")
+    assert status == 200 and got == b"" and hh["ETag"] == h2["ETag"]
+
+
+def test_catalog_is_hashed_once_per_version(tmp_path, monkeypatch):
+    calls = []
+    real = web.Entity.of
+    monkeypatch.setattr(web.Entity, "of", classmethod(lambda cls, *a: calls.append(1) or real(*a)))
+    (tmp_path / "catalog.json").write_text('{"games": []}')
+    cache = web.FileCache()
+    assert cache.get(tmp_path / "catalog.json") is cache.get(tmp_path / "catalog.json")
+    assert len(calls) == 1
+
+
+def test_page_has_an_etag_and_revalidates(server):
+    base, _ = server
+    status, h, _ = get(base + "/", {"Accept-Encoding": "gzip"})
+    assert status == 200 and h["Content-Encoding"] == "gzip" and h["ETag"]
+    assert get(base + "/", {"If-None-Match": h["ETag"]})[0] == 304
+
+
+def test_versioned_art_is_immutable_and_revalidates(server):
+    base, data = server
+    pic = data / "media" / "snes" / "Named_Boxarts" / "0123456789abcdef.png"
+    pic.parent.mkdir(parents=True)
+    pic.write_bytes(png(10, 10))
+    url = base + "/media/snes/Named_Boxarts/0123456789abcdef.png"
+    status, h, got = get(url + "?v=abc123")
+    assert status == 200 and got == pic.read_bytes()
+    assert h["Cache-Control"] == "public, max-age=31536000, immutable"
+    assert get(url)[1]["Cache-Control"] == "public, max-age=604800"  # an old catalog's URL
+    assert get(url, {"If-None-Match": h["ETag"]})[0] == 304
+    assert get(url, {"If-Modified-Since": h["Last-Modified"]})[0] == 304
+
+
+@pytest.mark.parametrize("header,ok", [
+    ("gzip, deflate, br, zstd", True), ("GZIP", True), ("*", True), ("br", False), ("", False),
+    ("gzip;q=0", False), ("gzip;q=0.5", True), ("*;q=0", False), ("gzip;q=0, *", False),
+])
+def test_accepts_gzip(header, ok):
+    assert web.accepts_gzip(header) is ok

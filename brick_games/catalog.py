@@ -10,6 +10,8 @@ their parent set (clones are variants of the same game).
 
 Art comes from libretro's thumbnails into MEDIA (box art, title screen,
 screenshot; downscaled, fetched once and kept), facts from libretro-database.
+The catalog names each picture with `?v=<its content hash>`, so the page can
+cache art for a year and still see a changed picture as a new URL.
 A system whose sources can't be reached still lists its games, without art.
 The catalog is written whole, then renamed into place: the web app never reads
 half a file.
@@ -34,6 +36,7 @@ from . import sources
 log = brick_observe.get_logger(__name__)
 SYSTEMS_FILE = Path(__file__).with_name("systems.yaml")
 ART_SIZE = 400
+ART_VERSION_LEN = 8
 WORKERS = 8
 # A failed download or a bad picture: OSError covers URLError, timeouts and PIL's
 # UnidentifiedImageError; ValueError a picture PIL can't decode.
@@ -120,23 +123,32 @@ def shrink(png: bytes) -> bytes:
         return out.getvalue()
 
 
+def versioned(rel: str, png: bytes) -> str:
+    """The art's URL path with a content hash, so the page can cache it for
+    good (web.py's MEDIA_IMMUTABLE): changed art gets a new URL."""
+    return f"{rel}?v={hashlib.sha256(png).hexdigest()[:ART_VERSION_LEN]}"
+
+
 def get_art(media: Path, system: dict, kind: str, thumb: str, dest_name: str) -> tuple[str | None, str | None]:
-    """Fetch (once) and keep one picture: (its path under MEDIA or None, the
-    fetch result for Stats or None when it was already cached). Runs in worker
-    threads, so the caller does the counting."""
+    """Fetch (once) and keep one picture: (its URL under /media/, versioned by
+    its content, or None; the fetch result for Stats or None when it was
+    already cached). Runs in worker threads, so the caller does the counting."""
     rel = f"{system['id']}/{kind}/{dest_name}.png"
     dest = media / rel
-    if dest.exists():
-        return rel, None
+    try:
+        return versioned(rel, dest.read_bytes()), None
+    except FileNotFoundError:
+        pass
     try:
         data = sources.fetch_thumb(system["libretro"], kind, thumb)
         if not data:
             return None, "missing"
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp = dest.with_suffix(".part")
-        tmp.write_bytes(shrink(data))
+        small = shrink(data)
+        tmp.write_bytes(small)
         tmp.replace(dest)
-        return rel, "ok"
+        return versioned(rel, small), "ok"
     except FETCH_ERRORS as e:  # one picture; the rest go on
         log.warning("art fetch failed", system=system["id"], kind=kind, error=str(e))
         return None, "error"
@@ -207,8 +219,21 @@ def scan(root: Path, data: Path, stats: Stats | None = None) -> dict:
         if found:
             systems.append({k: system[k] for k in ("id", "name", "devices")} | {"count": len(found)})
     catalog = {"generated": int(time.time()), "devices": config["devices"], "systems": systems, "games": games}
+    if unchanged(data / "catalog.json", catalog):
+        # Left alone, so its ETag stays and browsers keep their copy.
+        log.info("catalog unchanged", games=len(games), systems=len(systems))
+        return catalog
     tmp = data / ".catalog.json.part"
     tmp.write_text(json.dumps(catalog, separators=(",", ":")))
     tmp.replace(data / "catalog.json")
     log.info("catalog written", games=len(games), systems=len(systems))
     return catalog
+
+
+def unchanged(path: Path, catalog: dict) -> bool:
+    """Whether the catalog on disk says the same as this one, apart from when it was made."""
+    try:
+        old = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return False
+    return {**old, "generated": None} == {**catalog, "generated": None}

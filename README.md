@@ -34,6 +34,34 @@ devices play each system (brick-k8s-config#108).
 A scan that can't reach libretro still lists every game, without art. The
 catalog is written whole and then renamed into place.
 
+## Caching
+
+The catalog changes at most once a night and the art almost never, so
+browsers keep both and ask only "has it changed?" (sizes as of 2026-11: a
+1.6 MB catalog of about 5,000 games, about 13,800 pictures of about 70 kB).
+
+| What | Cache-Control | Validator | Compressed |
+| --- | --- | --- | --- |
+| `/` | `no-cache` | strong ETag | gzip |
+| `/api/catalog` | `no-cache` | strong ETag + Last-Modified | gzip (1.6 MB to ~0.3 MB) |
+| `/media/...png?v=<hash>` | `public, max-age=31536000, immutable` | ETag + Last-Modified | no (PNG) |
+| `/media/...png` (no `v`) | `public, max-age=604800` | ETag + Last-Modified | no |
+
+- `no-cache` means "revalidate first": the browser sends `If-None-Match`
+  and gets a bodiless `304` until the file changes.
+- The web app reads, hashes and gzips `catalog.json` once per version of the
+  file (it checks the open file's inode, mtime and size), not per request.
+  Each encoding has its own ETag (`"<hash>"`, `"<hash>-gz"`) and either one
+  revalidates; responses say `Vary: Accept-Encoding`.
+- The scan writes each picture's URL with `?v=` and the first 8 hex digits of
+  its SHA-256, so a changed picture is a new URL and the old one can be
+  cached for good. It leaves `catalog.json` alone when nothing but its
+  `generated` time would change, so the ETag survives quiet nights.
+- Nothing in front compresses or caches: the front door's Caddy and Traefik
+  pass the headers through, so compression is done here, once.
+- `/metrics`: `games_web_requests_total{route,status}` (304s against 200s)
+  and `games_web_response_bytes_total{route,encoding}`.
+
 ## Run it
 
 ```bash
