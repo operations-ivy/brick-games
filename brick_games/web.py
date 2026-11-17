@@ -5,7 +5,8 @@ the cached art. Nothing here touches the ROMs.
 
     GET  /                  the page
     GET  /api/catalog       catalog.json (systems, devices, games)
-    GET  /media/<path>.png  art from the cache (paths checked to stay inside it)
+    GET  /media/<path>.avif art from the cache (paths checked to stay inside it;
+                            .png until the cache is converted)
     GET  /health /ready /metrics
 
 Caching (README "Caching"): the page and the catalog carry a strong ETag (the
@@ -37,7 +38,8 @@ from prometheus_client import Counter
 
 log = brick_observe.get_logger(__name__)
 PAGE_FILE = Path(__file__).parent / "static" / "index.html"
-MEDIA_PATH = re.compile(r"^/media/([a-z0-9]+/Named_(?:Boxarts|Titles|Snaps)/[0-9a-f]{16}\.png)$")
+MEDIA_PATH = re.compile(r"^/media/(?P<rel>[a-z0-9]+/Named_(?:Boxarts|Titles|Snaps)/[0-9a-f]{16}\.(?P<ext>avif|png))$")
+MEDIA_TYPES = {"avif": "image/avif", "png": "image/png"}
 REQUESTS = Counter("games_web_requests_total", "Requests, by route and status", ["route", "status"])
 SENT_BYTES = Counter("games_web_response_bytes_total", "Body bytes sent, by route and content encoding",
                      ["route", "encoding"])
@@ -191,7 +193,7 @@ class Handler(BaseHTTPRequestHandler):
             route(self, path)
         elif m := MEDIA_PATH.match(path):
             # parse_qs drops blank values: a bare ?v= is not a versioned URL.
-            self._media(m.group(1), "v" in parse_qs(query))
+            self._media(m["rel"], MEDIA_TYPES[m["ext"]], "v" in parse_qs(query))
         else:
             self._respond(404, b"not found", "text/plain", "other")
 
@@ -206,7 +208,7 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send_entity(entity, "application/json", path)
 
-    def _media(self, rel: str, versioned: bool) -> None:
+    def _media(self, rel: str, content_type: str, versioned: bool) -> None:
         media = (self.data / "media").resolve()
         file = (media / rel).resolve()
         if not file.is_relative_to(media):
@@ -225,7 +227,7 @@ class Handler(BaseHTTPRequestHandler):
             if self._not_modified(tag, st.st_mtime):
                 self._respond(304, b"", None, "/media", cache, headers)
             else:
-                self._respond(200, f.read(), "image/png", "/media", cache, headers)
+                self._respond(200, f.read(), content_type, "/media", cache, headers)
 
     def _health(self, path: str) -> None:
         ok = path == "/health" or (self.data / "catalog.json").exists()
