@@ -18,4 +18,4 @@ resources:
 
 images:
   - name: whitepatrick/brick-games
-    newTag: 0.3.0
+    newTag: 0.4.0
