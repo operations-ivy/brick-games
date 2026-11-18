@@ -36,7 +36,8 @@ devices play each system (brick-k8s-config#108).
   `games_ratings_fetches{source,result="error"}` and brick9000's board shows
   it in amber (brick-cicd-config, `checks.py`). Nothing alerts or pages on it.
   The page shows them in each game's details, the best one (Metascore, else
-  critics, else users) on its card, and sorts by it under "Best rated".
+  critics, else users) on its card, sorts by it under "Best rated", and
+  filters by it (90, 80, 70 or 60 and up, rated, not rated).
 - **The page** (`python -m brick_games web`) serves `catalog.json`, the art,
   `/health`, `/ready` and `/metrics`. It's read-only and has no ROM access.
 - **Plays on**: each system's `devices` in `systems.yaml`, as `good`, `ok` or
