@@ -225,10 +225,10 @@ class Ratings:
 
     def for_system(self, system: dict) -> tuple[dict[str, dict], dict[str, dict]]:
         """(IGDB index, RAWG index) for one system, each key(name) -> scores."""
-        sources = (("igdb", self.igdb, bool(self.igdb_id and self.igdb_secret)),
-                   ("rawg", self.rawg, bool(self.rawg_key)))
+        plan = (("igdb", self.igdb, bool(self.igdb_id and self.igdb_secret)),
+                ("rawg", self.rawg, bool(self.rawg_key)))
         indexes = []
-        for source, fetch, has_key in sources:
+        for source, fetch, has_key in plan:
             try:
                 indexes.append(build_index(self.cached(source, system, fetch, has_key)))
             except Exception as e:  # a list that can't be read: no scores, the scan goes on

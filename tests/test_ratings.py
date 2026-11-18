@@ -125,10 +125,10 @@ def age_caches(tmp_path):
 
 
 @pytest.mark.parametrize("failure", [
-    urllib.error.HTTPError(ratings.TWITCH_TOKEN, 401, "Unauthorized", {}, None),  # a bad key
-    urllib.error.URLError("connection refused"),  # no connection
-    TimeoutError("timed out"),
-    RuntimeError("anything else at all"),
+    pytest.param(urllib.error.HTTPError(ratings.TWITCH_TOKEN, 401, "Unauthorized", {}, None), id="bad-key"),
+    pytest.param(urllib.error.URLError("connection refused"), id="no-connection"),
+    pytest.param(TimeoutError("timed out"), id="timeout"),
+    pytest.param(RuntimeError("anything else at all"), id="anything-else"),
 ])
 def test_a_failing_source_keeps_the_old_list_is_counted_and_asked_once(tmp_path, api, monkeypatch, failure):
     ratings.Ratings(tmp_path, KEYS).for_system(PS2)
@@ -147,6 +147,7 @@ def test_a_failing_source_keeps_the_old_list_is_counted_and_asked_once(tmp_path,
     asked = len(api)
     assert rater.for_system(SNES) == ({}, {})  # no cache, and nothing asked again
     assert len(api) == asked
+    # one error per system: PS2 (fetch failed) and SNES (source already down)
     assert rater.results["igdb"] == {"fetched": 0, "cached": 0, "error": 2, "no_key": 0}
 
 
