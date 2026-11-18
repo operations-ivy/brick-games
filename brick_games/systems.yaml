@@ -2,6 +2,9 @@
 #
 #   folder:   the directory under ROMS_ROOT (a system can have several)
 #   libretro: the system's name in libretro's thumbnails and database
+#   igdb:     IGDB platform ids, for critic and user ratings (ratings.py)
+#   rawg:     RAWG platform ids, for the Metascore; only systems Metacritic
+#             reviewed (about 1995 on)
 #   exts:     the game files (anything else in the folder is ignored:
 #             .dat, .txt, saves, artwork, per-track .bin of a .cue game)
 #   devices:  device id -> good (full speed) | ok (most games; some slow or
@@ -21,120 +24,150 @@ systems:
     name: "Nintendo Entertainment System"
     folders: [nes]
     libretro: "Nintendo - Nintendo Entertainment System"
+    igdb: [18, 99, 51]
     exts: [nes, fds]
     devices: {brick9000: good, rp2plus: good, rg476h: good}
   - id: snes
     name: "Super Nintendo"
     folders: [snes]
     libretro: "Nintendo - Super Nintendo Entertainment System"
+    igdb: [19, 58]
     exts: [smc, sfc]
     devices: {brick9000: good, rp2plus: good, rg476h: good}
   - id: gb
     name: "Game Boy / Color"
     folders: [gb, gbc]
     libretro: "Nintendo - Game Boy"
+    igdb: [33, 22]
     exts: [gb, gbc, zip]
     devices: {brick9000: good, rp2plus: good, rg476h: good}
   - id: gba
     name: "Game Boy Advance"
     folders: [gba]
     libretro: "Nintendo - Game Boy Advance"
+    igdb: [24]
+    rawg: [24]
     exts: [gba]
     devices: {brick9000: good, rp2plus: good, rg476h: good}
   - id: n64
     name: "Nintendo 64"
     folders: [n64]
     libretro: "Nintendo - Nintendo 64"
+    igdb: [4]
+    rawg: [83]
     exts: [n64, z64, v64]
     devices: {brick9000: no, rp2plus: ok, rg476h: good}
   - id: nds
     name: "Nintendo DS"
     folders: [nds]
     libretro: "Nintendo - Nintendo DS"
+    igdb: [20]
+    rawg: [9]
     exts: [nds]
     devices: {brick9000: no, rp2plus: no, rg476h: good}
   - id: gc
     name: "GameCube"
     folders: [gc]
     libretro: "Nintendo - GameCube"
+    igdb: [21]
+    rawg: [105]
     exts: [rvz, iso, gcz]
     devices: {brick9000: no, rp2plus: no, rg476h: ok}
   - id: wii
     name: "Wii"
     folders: [Wii]
     libretro: "Nintendo - Wii"
+    igdb: [5]
+    rawg: [11]
     exts: [wbfs, rvz, iso]
     devices: {brick9000: no, rp2plus: no, rg476h: ok}
   - id: megadrive
     name: "Genesis / Mega Drive"
     folders: [megadrive]
     libretro: "Sega - Mega Drive - Genesis"
+    igdb: [29]
     exts: [bin, md, gen, smd]
     devices: {brick9000: good, rp2plus: good, rg476h: good}
   - id: gamegear
     name: "Game Gear"
     folders: [gamegear]
     libretro: "Sega - Game Gear"
+    igdb: [35]
     exts: [gg, zip]
     devices: {brick9000: no, rp2plus: good, rg476h: good}
   - id: sega32x
     name: "Sega 32X"
     folders: [sega32x]
     libretro: "Sega - 32X"
+    igdb: [30]
     exts: [32x]
     devices: {brick9000: good, rp2plus: good, rg476h: good}
   - id: segacd
     name: "Sega CD"
     folders: [segacd]
     libretro: "Sega - Mega-CD - Sega CD"
+    igdb: [78]
     exts: [chd, cue]
     devices: {brick9000: good, rp2plus: good, rg476h: good}
   - id: saturn
     name: "Sega Saturn"
     folders: [segasaturn]
     libretro: "Sega - Saturn"
+    igdb: [32]
+    rawg: [107]
     exts: [cue, chd]
     devices: {brick9000: no, rp2plus: no, rg476h: good}
   - id: dreamcast
     name: "Dreamcast"
     folders: [Dreamcast]
     libretro: "Sega - Dreamcast"
+    igdb: [23]
+    rawg: [106]
     exts: [chd, cdi, gdi]
     devices: {brick9000: ok, rp2plus: good, rg476h: good}
   - id: pce
     name: "PC Engine / TurboGrafx-16"
     folders: [pcengine]
     libretro: "NEC - PC Engine - TurboGrafx 16"
+    igdb: [86]
     exts: [pce]
     devices: {brick9000: no, rp2plus: good, rg476h: good}
   - id: pcecd
     name: "PC Engine CD"
     folders: [pcengine]
     libretro: "NEC - PC Engine CD - TurboGrafx-CD"
+    igdb: [150]
     exts: [cue, chd]
     devices: {brick9000: no, rp2plus: good, rg476h: good}
   - id: psx
     name: "PlayStation"
     folders: [psx]
     libretro: "Sony - PlayStation"
+    igdb: [7]
+    rawg: [27]
     exts: [chd, cue, pbp]
     devices: {brick9000: good, rp2plus: good, rg476h: good}
   - id: ps2
     name: "PlayStation 2"
     folders: [PS2]
     libretro: "Sony - PlayStation 2"
+    igdb: [8]
+    rawg: [15]
     exts: [iso, chd]
     devices: {brick9000: no, rp2plus: no, rg476h: ok}
   - id: psp
     name: "PlayStation Portable"
     folders: [psp]
     libretro: "Sony - PlayStation Portable"
+    igdb: [38]
+    rawg: [17]
     exts: [iso, cso, pbp]
     devices: {brick9000: ok, rp2plus: no, rg476h: good}
   - id: neogeo
     name: "Neo Geo"
     folders: [neogeo]
     libretro: "SNK - Neo Geo"
+    igdb: [80, 79]
     exts: [zip]
     arcade: true
     devices: {brick9000: good, rp2plus: good, rg476h: good}
@@ -142,6 +175,7 @@ systems:
     name: "Arcade (FinalBurn Neo)"
     folders: [fba, fba-retroid]
     libretro: "FBNeo - Arcade Games"
+    igdb: [52]
     exts: [zip]
     arcade: true
     devices: {brick9000: good, rp2plus: good, rg476h: good}
