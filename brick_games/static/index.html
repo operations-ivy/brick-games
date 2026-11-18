@@ -73,6 +73,9 @@
   .badge.good { color: var(--green); border-color: var(--green); }
   .badge.ok { color: var(--amber); border-color: var(--amber); }
   .badge.no { color: var(--slate); text-decoration: line-through; }
+  .score { color: var(--green); }
+  .score.mid { color: var(--amber); }
+  .score.low { color: var(--red); }
   .files { font: 12px var(--mono); color: var(--dim); max-height: 110px; overflow: auto; white-space: pre; margin-top: 10px; }
   a { color: var(--cyan); }
   .close { position: absolute; top: 10px; right: 10px; }
@@ -89,7 +92,7 @@
     </select>
     <select id="genre" aria-label="Genre"><option value="">Any genre</option></select>
     <select id="sort" aria-label="Sort">
-      <option value="title">A–Z</option><option value="year">Oldest first</option><option value="-year">Newest first</option>
+      <option value="title">A–Z</option><option value="year">Oldest first</option><option value="-year">Newest first</option><option value="-score">Best rated</option>
     </select>
   </div>
   <div class="chips" id="systems"></div>
@@ -132,6 +135,12 @@ function chips() {
     `<span class="chip ${state.system === s.id ? "on" : ""}" data-s="${esc(s.id)}">${esc(s.name)}<span class="n">${s.count}</span></span>`).join("");
 }
 
+// The score a card shows and "Best rated" sorts by: the Metascore, else the
+// critics' average (IGDB), else IGDB's users. 0-100.
+const score = (g) => g.metascore ?? g.critics ?? g.users ?? null;
+const tone = (n) => (n >= 75 ? "score" : n >= 50 ? "score mid" : "score low");
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
 function playable(g, device) {
   const v = cat.bySystem[g.system].devices[device];
   return v === "good" || v === "ok";
@@ -147,15 +156,18 @@ function filter() {
   const year = (g) => parseInt(g.year) || (state.sort === "year" ? 9999 : 0);
   if (state.sort === "year") matches.sort((a, b) => year(a) - year(b) || a.title.localeCompare(b.title));
   else if (state.sort === "-year") matches.sort((a, b) => year(b) - year(a) || a.title.localeCompare(b.title));
+  else if (state.sort === "-score") matches.sort((a, b) => (score(b) ?? -1) - (score(a) ?? -1) || a.title.localeCompare(b.title));
   else matches.sort((a, b) => a.title.localeCompare(b.title));
 }
 
 function card(g) {
   const pic = g.art.box || g.art.title || g.art.snap;
   const art = pic ? `<img loading="lazy" src="/media/${esc(pic)}" alt="">` : `<div class="none">${esc(g.title)}</div>`;
-  const sub = [cat.bySystem[g.system].name, g.year].filter(Boolean).join(" · ");
+  const sub = esc([cat.bySystem[g.system].name, g.year].filter(Boolean).join(" · "));
+  const s = score(g);
+  const rated = s === null ? "" : ` · <span class="${tone(s)}">${s}</span>`;
   return `<div class="card" tabindex="0" data-id="${esc(g.id)}"><div class="art">${art}</div>
-    <div class="meta"><div class="name">${esc(g.title)}</div><div class="sub">${esc(sub)}</div></div></div>`;
+    <div class="meta"><div class="name">${esc(g.title)}</div><div class="sub">${sub}${rated}</div></div></div>`;
 }
 
 function render() {
@@ -182,6 +194,12 @@ function open(id) {
   const facts = [["Year", g.year], ["Genre", g.genre], ["Players", g.players], ["Developer", g.developer],
                  ["Publisher", g.publisher], ["Discs", g.discs > 1 ? g.discs : null]]
     .filter(([, v]) => v).map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join("");
+  const rated = (n, note) => `<span class="${tone(n)}">${n}</span> <span class="sub">${esc(note)}</span>`;
+  const scores = [
+    ["Metascore", g.metascore != null && rated(g.metascore, "Metacritic, via RAWG")],
+    ["Critics", g.critics != null && rated(g.critics, `IGDB, ${plural(g.critic_reviews ?? 0, "review")}`)],
+    ["Users", g.users != null && rated(g.users, `IGDB, ${plural(g.user_reviews ?? 0, "rating")}`)],
+  ].filter(([, v]) => v).map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
   const plays = Object.entries(cat.devices).map(([id, d]) => {
     const v = s.devices[id] || "no";
     const word = { good: "plays", ok: "mostly", no: "no" }[v];
@@ -192,7 +210,7 @@ function open(id) {
   $("dlg").innerHTML = `<button class="close" id="x">CLOSE</button><div class="dlg">
     <div class="box">${g.art.box ? `<img src="/media/${esc(g.art.box)}" alt="box art">` : ""}<div class="shots">${shots}</div></div>
     <div><div class="sys">${esc(s.name)}</div><h2>${esc(g.title)}</h2>
-      <dl>${facts}</dl>
+      <dl>${facts}${scores}</dl>
       <h3>Plays on</h3><div class="plays">${plays}</div>
       <a href="${manual}" target="_blank" rel="noopener">Find the manual ↗</a>
       <h3>Files</h3><div class="files">${g.files.map(esc).join("\n")}</div></div></div>`;

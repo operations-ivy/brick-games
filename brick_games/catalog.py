@@ -9,7 +9,8 @@ formats), with the discs kept apart in `discs`. Arcade zips are grouped under
 their parent set (clones are variants of the same game).
 
 Art comes from libretro's thumbnails into MEDIA (box art, title screen,
-screenshot; downscaled, fetched once and kept), facts from libretro-database.
+screenshot; downscaled, fetched once and kept), facts from libretro-database,
+ratings from IGDB and RAWG when their keys are set (ratings.py).
 The catalog names each picture with `?v=<its content hash>`, so the page can
 cache art for a year and still see a changed picture as a new URL.
 A system whose sources can't be reached still lists its games, without art.
@@ -32,7 +33,7 @@ import brick_observe
 import yaml
 from PIL import Image
 
-from . import sources
+from . import ratings, sources
 
 log = brick_observe.get_logger(__name__)
 SYSTEMS_FILE = Path(__file__).with_name("systems.yaml")
@@ -197,7 +198,8 @@ def get_art(media: Path, system: dict, kind: str, thumb: str, dest_name: str) ->
         return None, "error"
 
 
-def scan_system(root: Path, media: Path, system: dict, fbneo: tuple[dict, dict], stats: Stats) -> list[dict]:
+def scan_system(root: Path, media: Path, system: dict, fbneo: tuple[dict, dict], stats: Stats,
+                rater: ratings.Ratings) -> list[dict]:
     titles, parents = fbneo if system.get("arcade") else ({}, {})
     files = find_files(root, system)
     games = group(files, system, titles, parents)
@@ -207,6 +209,7 @@ def scan_system(root: Path, media: Path, system: dict, fbneo: tuple[dict, dict],
     except OSError as e:
         log.warning("sources unreachable; listing without art", system=system["id"], error=str(e))
         indexes, facts = {}, {}
+    scored = rater.for_system(system) if games else ({}, {})  # no fetch for an empty system
     jobs = []
     for game in games:
         game["id"] = slug(system["id"], game["key"])
@@ -214,6 +217,7 @@ def scan_system(root: Path, media: Path, system: dict, fbneo: tuple[dict, dict],
         game["art"] = {}
         name = game["source_name"]
         game.update(facts.get(sources.norm(name), {}))
+        game.update(ratings.scores(scored, name))
         for kind, index in indexes.items():
             cands = sources.lookup(index, name)
             if cands:
@@ -229,7 +233,8 @@ def scan_system(root: Path, media: Path, system: dict, fbneo: tuple[dict, dict],
             if rel:
                 game["art"][sources.KIND_KEYS[kind]] = rel
     stats.per_system[system["id"]] = {"files": len(files), "games": len(games),
-                                      "with_box_art": sum(1 for g in games if "box" in g["art"])}
+                                      "with_box_art": sum(1 for g in games if "box" in g["art"]),
+                                      "with_rating": sum(1 for g in games if ratings.has_score(g))}
     for game in games:
         del game["key"], game["source_name"]
         game["files"] = [str(f.relative_to(root)) for f in game["files"]]
@@ -254,8 +259,9 @@ def unchanged(path: Path, catalog: dict) -> bool:
         return False
 
 
-def scan(root: Path, data: Path, stats: Stats | None = None) -> dict:
+def scan(root: Path, data: Path, stats: Stats | None = None, rater: ratings.Ratings | None = None) -> dict:
     stats = stats or Stats()
+    rater = rater or ratings.Ratings(data)
     config = load_systems()
     media = data / "media"
     media.mkdir(parents=True, exist_ok=True)
@@ -266,7 +272,7 @@ def scan(root: Path, data: Path, stats: Stats | None = None) -> dict:
         fbneo = ({}, {})
     games, systems = [], []
     for system in config["systems"]:
-        found = scan_system(root, media, system, fbneo, stats)
+        found = scan_system(root, media, system, fbneo, stats, rater)
         games += found
         if found:
             systems.append({k: system[k] for k in ("id", "name", "devices")} | {"count": len(found)})

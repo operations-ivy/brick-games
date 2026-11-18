@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from brick_games import catalog, sources, web
+from brick_games import catalog, ratings, sources, web
 
 
 def png(w: int = 600, h: int = 800) -> bytes:
@@ -98,6 +98,9 @@ def offline(monkeypatch):
     monkeypatch.setattr(sources, "metadata", lambda system: {sources.norm("Final Fight (USA)"): {"year": "1991", "genre": "Beat'em up"}})
     monkeypatch.setattr(catalog, "load_fbneo", lambda: (
         {"sf2": "Street Fighter II (World)", "sf2ua": "Street Fighter II (US rev A)"}, {"sf2ua": "sf2"}))
+    scores = {"snes": ratings.build_index([{"names": ["Final Fight"], "critics": 77, "critic_reviews": 6}]),
+              "dreamcast": ratings.build_index([{"names": ["Shenmue"], "metascore": 88}])}
+    monkeypatch.setattr(ratings.Ratings, "for_system", lambda self, system: (scores.get(system["id"], {}),))
 
 
 def test_scan_groups_games_fetches_art_and_writes_the_catalog(tmp_path, offline):
@@ -109,6 +112,8 @@ def test_scan_groups_games_fetches_art_and_writes_the_catalog(tmp_path, offline)
     # two regions of one game, one entry; the .txt ignored
     ff = by_title["Final Fight"]
     assert len(ff["files"]) == 2 and ff["year"] == "1991" and ff["genre"] == "Beat'em up"
+    assert ff["critics"] == 77 and ff["critic_reviews"] == 6 and "metascore" not in ff
+    assert by_title["Shenmue"]["metascore"] == 88
     box, _, version = ff["art"]["box"].partition("?v=")
     assert box.endswith(".avif") and (data / "media" / box).exists()
     with Image.open(data / "media" / box) as im:
@@ -121,7 +126,7 @@ def test_scan_groups_games_fetches_art_and_writes_the_catalog(tmp_path, offline)
     sf2 = by_title["Street Fighter II"]
     assert sorted(Path(f).name for f in sf2["files"]) == ["sf2.zip", "sf2ua.zip"]
     assert "neogeo" not in json.dumps(cat["games"])
-    assert stats.per_system["snes"] == {"files": 2, "games": 1, "with_box_art": 1}
+    assert stats.per_system["snes"] == {"files": 2, "games": 1, "with_box_art": 1, "with_rating": 1}
     assert json.loads((data / "catalog.json").read_text())["games"] == cat["games"]
     # a second scan downloads nothing again
     before = dict(stats.fetches)
@@ -141,7 +146,9 @@ def test_scan_without_network_still_lists_games(tmp_path, monkeypatch):
         raise OSError("no network")
 
     monkeypatch.setattr(sources, "get", down)
-    cat = catalog.scan(roms, data)
+    monkeypatch.setattr(ratings, "request", down)
+    keys = {"IGDB_CLIENT_ID": "i", "IGDB_CLIENT_SECRET": "s", "RAWG_KEY": "k"}  # keys set, network down
+    cat = catalog.scan(roms, data, rater=ratings.Ratings(data, keys))
     assert {g["title"] for g in cat["games"]} >= {"Final Fight", "Shenmue"}
     assert all(not g["art"] for g in cat["games"])
 

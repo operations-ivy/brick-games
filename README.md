@@ -21,6 +21,16 @@ devices play each system (brick-k8s-config#108).
 - **Facts** (year, genre, players, developer, publisher) come from
   libretro-database's `metadat`. Coverage is good for cartridge systems and
   patchy for disc systems.
+- **Ratings** come from IGDB (critics' average and IGDB users, all eras) and
+  RAWG (the Metascore: Metacritic has no API of its own, and only covers
+  about 1995 on), as `ratings.py` describes. Each system's platform ids are
+  `igdb` and `rawg` in `systems.yaml`. The keys (`IGDB_CLIENT_ID` and
+  `IGDB_CLIENT_SECRET`, a Twitch app's; `RAWG_KEY`) come from the
+  `brick-games-ratings` Secret, sealed in brick-k8s-secrets. Without them
+  there are no ratings and everything else works. Lists are kept in
+  `DATA/ratings` and fetched again weekly; a failed fetch keeps the last list.
+  The page shows them in each game's details, the best one (Metascore, else
+  critics, else users) on its card, and sorts by it under "Best rated".
 - **The page** (`python -m brick_games web`) serves `catalog.json`, the art,
   `/health`, `/ready` and `/metrics`. It's read-only and has no ROM access.
 - **Plays on**: each system's `devices` in `systems.yaml`, as `good`, `ok` or
@@ -82,7 +92,8 @@ release bumps `version` in `pyproject.toml` and `newTag` in
 
 - **Scan:** `brick-games-scan` CronJob, 03:30 every night, at most 4 hours, on
   brick2000 (`chuck.io/storage-node`), with the ROMs as a read-only hostPath.
-  It pushes `games_catalog_*` and `games_art_fetches` to the Pushgateway.
+  It pushes `games_catalog_*` (`with_rating` among them) and
+  `games_art_fetches` to the Pushgateway.
 - **Web:** `brick-games-web`, one replica on brick2000, with the data volume
   read-only.
 - **Network:** default-deny. The scan reaches only DNS, traces, the

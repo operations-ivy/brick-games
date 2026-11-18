@@ -1,6 +1,8 @@
 # The nightly scan: reads brick2000's ROM tree (read-only, names only), fetches
-# art and facts from libretro, writes catalog.json and the art cache. One run at
-# a time; a run that can't reach libretro still lists every game.
+# art and facts from libretro and ratings from IGDB and RAWG, writes
+# catalog.json and the art cache. One run at a time; a run that can't reach
+# libretro still lists every game. The ratings keys come from the
+# brick-games-ratings SealedSecret (brick-k8s-secrets); without it, no ratings.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -51,6 +53,9 @@ spec:
               valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
             - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector-opentelemetry-collector.monitoring.svc.cluster.local:4317"}
             - {name: PUSHGATEWAY_URL, value: "http://pushgateway-prometheus-pushgateway.monitoring.svc.cluster.local:9091"}
+            # IGDB_CLIENT_ID, IGDB_CLIENT_SECRET, RAWG_KEY
+            envFrom:
+            - secretRef: {name: brick-games-ratings, optional: true}
             volumeMounts:
             - {name: roms, mountPath: /roms, readOnly: true}
             - {name: data, mountPath: /data}
