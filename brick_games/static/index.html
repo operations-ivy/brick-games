@@ -76,6 +76,7 @@
   .score { color: var(--green); }
   .score.mid { color: var(--amber); }
   .score.low { color: var(--red); }
+  .score.few { opacity: .45; }
   .files { font: 12px var(--mono); color: var(--dim); max-height: 110px; overflow: auto; white-space: pre; margin-top: 10px; }
   a { color: var(--cyan); }
   .close { position: absolute; top: 10px; right: 10px; }
@@ -94,7 +95,7 @@
     <select id="rating" aria-label="Rating">
       <option value="">Any rating</option><option value="90">90 and up</option><option value="80">80 and up</option>
       <option value="70">70 and up</option><option value="60">60 and up</option>
-      <option value="rated">Rated</option><option value="unrated">Not rated</option>
+      <option value="rated">Rated (10+ reviews)</option><option value="unrated">Not rated</option>
     </select>
     <select id="sort" aria-label="Sort">
       <option value="title">A–Z</option><option value="year">Oldest first</option><option value="-year">Newest first</option><option value="-score">Best rated</option>
@@ -124,6 +125,11 @@ async function load() {
   for (const g of cat.games) {
     g.hay = [g.title, g.genre, g.developer, g.publisher, cat.bySystem[g.system].name].join(" ").toLowerCase();
   }
+  for (const [k] of KINDS) {
+    const xs = cat.games.map((g) => g[k]).filter((v) => v != null);
+    MEAN[k] = xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0;
+  }
+  for (const g of cat.games) g.rank = ranked(g);
   for (const [id, d] of Object.entries(cat.devices)) {
     $("device").insertAdjacentHTML("beforeend", `<option value="${esc(id)}">Plays on ${esc(d.name)}</option>`);
   }
@@ -140,15 +146,42 @@ function chips() {
     `<span class="chip ${state.system === s.id ? "on" : ""}" data-s="${esc(s.id)}">${esc(s.name)}<span class="n">${s.count}</span></span>`).join("");
 }
 
-// The score a card shows and "Best rated" sorts by: the Metascore, else the
-// critics' average (IGDB), else IGDB's users. 0-100.
+// Any score at all: the Metascore, else the critics' average (IGDB), else
+// IGDB's users. 0-100.
 const score = (g) => g.metascore ?? g.critics ?? g.users ?? null;
+
+// What "Best rated" and the rating filter use (the user, 2026-11-18): a score
+// counts only from MIN_REVIEWS reviews up, and is then pulled toward the
+// catalog's average for its kind as if it had PRIOR_REVIEWS more average
+// reviews (a Bayesian average): a 100 from 10 reviews ranks about 85, from 50
+// about 95. The Metascore counts as it is (Metacritic needs several reviews to
+// give one). A game with no score that counts isn't rated here; its card
+// still shows its score, dimmed.
+const MIN_REVIEWS = 10, PRIOR_REVIEWS = 10;
+const KINDS = [["critics", "critic_reviews"], ["users", "user_reviews"]];
+const MEAN = {};  // kind -> the catalog's average score, set in load()
+// The score that counts: [kind, score, reviews], or null.
+function counted(g) {
+  if (g.metascore != null) return ["metascore", g.metascore, null];
+  for (const [k, n] of KINDS) {
+    if (g[k] != null && (g[n] ?? 0) >= MIN_REVIEWS) return [k, g[k], g[n]];
+  }
+  return null;
+}
+function ranked(g) {
+  const c = counted(g);
+  if (!c) return null;
+  const [kind, s, n] = c;
+  return n === null ? s : (n * s + PRIOR_REVIEWS * MEAN[kind]) / (n + PRIOR_REVIEWS);
+}
+// The score a card shows: the one that counts, else any score (dimmed).
+const cardScore = (g) => counted(g)?.[1] ?? score(g);
 const tone = (n) => (n >= 75 ? "score" : n >= 50 ? "score mid" : "score low");
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
-// The rating filter: a floor on the card's score, or rated / not rated.
+// The rating filter: a floor on the ranked score, or rated / not rated.
 function meetsRating(g) {
-  const s = score(g);
+  const s = g.rank;
   if (!state.rating) return true;
   if (state.rating === "rated") return s !== null;
   if (state.rating === "unrated") return s === null;
@@ -171,7 +204,7 @@ function filter() {
   const year = (g) => parseInt(g.year) || (state.sort === "year" ? 9999 : 0);
   if (state.sort === "year") matches.sort((a, b) => year(a) - year(b) || a.title.localeCompare(b.title));
   else if (state.sort === "-year") matches.sort((a, b) => year(b) - year(a) || a.title.localeCompare(b.title));
-  else if (state.sort === "-score") matches.sort((a, b) => (score(b) ?? -1) - (score(a) ?? -1) || a.title.localeCompare(b.title));
+  else if (state.sort === "-score") matches.sort((a, b) => (b.rank ?? -1) - (a.rank ?? -1) || a.title.localeCompare(b.title));
   else matches.sort((a, b) => a.title.localeCompare(b.title));
 }
 
@@ -179,8 +212,10 @@ function card(g) {
   const pic = g.art.box || g.art.title || g.art.snap;
   const art = pic ? `<img loading="lazy" src="/media/${esc(pic)}" alt="">` : `<div class="none">${esc(g.title)}</div>`;
   const sub = esc([cat.bySystem[g.system].name, g.year].filter(Boolean).join(" · "));
-  const s = score(g);
-  const rated = s === null ? "" : ` · <span class="${tone(s)}">${s}</span>`;
+  const s = cardScore(g);
+  const few = g.rank === null;
+  const hint = few ? ` title="fewer than ${MIN_REVIEWS} reviews: not used for Best rated"` : "";
+  const rated = s === null ? "" : ` · <span class="${tone(s)}${few ? " few" : ""}"${hint}>${s}</span>`;
   return `<div class="card" tabindex="0" data-id="${esc(g.id)}"><div class="art">${art}</div>
     <div class="meta"><div class="name">${esc(g.title)}</div><div class="sub">${sub}${rated}</div></div></div>`;
 }
@@ -214,6 +249,8 @@ function open(id) {
     ["Metascore", g.metascore != null && rated(g.metascore, "Metacritic, via RAWG")],
     ["Critics", g.critics != null && rated(g.critics, `IGDB, ${plural(g.critic_reviews ?? 0, "review")}`)],
     ["Users", g.users != null && rated(g.users, `IGDB, ${plural(g.user_reviews ?? 0, "rating")}`)],
+    ["Ranked", score(g) != null && (g.rank !== null ? rated(Math.round(g.rank), "for Best rated, weighted by reviews")
+                                     : `<span class="sub">not ranked: fewer than ${MIN_REVIEWS} reviews</span>`)],
   ].filter(([, v]) => v).map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
   const plays = Object.entries(cat.devices).map(([id, d]) => {
     const v = s.devices[id] || "no";
