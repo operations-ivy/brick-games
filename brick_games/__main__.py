@@ -22,6 +22,11 @@ def publish(run, stats) -> None:
                       value, {"system": system})
     for result, value in stats.fetches.items():
         run.gauge("games_art_fetches", "Art downloads in the run, by result", value, {"result": result})
+    # The board (brick-status) shows result="error" in amber; nothing alerts on it.
+    for source, results in stats.ratings.items():
+        for result, value in results.items():
+            run.gauge("games_ratings_fetches", "Systems' ratings lists in the run, by source and result",
+                      value, {"source": source, "result": result})
 
 
 def main(argv: list[str] | None = None) -> None:

@@ -148,9 +148,13 @@ def test_scan_without_network_still_lists_games(tmp_path, monkeypatch):
     monkeypatch.setattr(sources, "get", down)
     monkeypatch.setattr(ratings, "request", down)
     keys = {"IGDB_CLIENT_ID": "i", "IGDB_CLIENT_SECRET": "s", "RAWG_KEY": "k"}  # keys set, network down
-    cat = catalog.scan(roms, data, rater=ratings.Ratings(data, keys))
+    stats = catalog.Stats()
+    cat = catalog.scan(roms, data, stats, rater=ratings.Ratings(data, keys))
     assert {g["title"] for g in cat["games"]} >= {"Final Fight", "Shenmue"}
     assert all(not g["art"] for g in cat["games"])
+    assert (data / "catalog.json").exists()  # ratings down doesn't fail the scan
+    # one per system with games (RAWG has only the Dreamcast of the two)
+    assert (stats.ratings["igdb"]["error"], stats.ratings["rawg"]["error"]) == (2, 1)
 
 
 @pytest.fixture
@@ -217,10 +221,13 @@ def test_publish_sends_each_count_as_a_gauge():
     stats = catalog.Stats()
     stats.per_system["snes"] = {"files": 2, "games": 1, "with_box_art": 1}
     stats.fetched("ok")
+    stats.ratings = {"igdb": {"fetched": 0, "cached": 3, "error": 2, "no_key": 0}}
     run = Run()
     publish(run, stats)
     assert ("games_catalog_games", 1, {"system": "snes"}) in run.gauges
     assert ("games_art_fetches", 1, {"result": "ok"}) in run.gauges
+    assert ("games_ratings_fetches", 2, {"source": "igdb", "result": "error"}) in run.gauges
+    assert ("games_ratings_fetches", 0, {"source": "igdb", "result": "fetched"}) in run.gauges
 
 
 def get(url, headers=None, method="GET"):

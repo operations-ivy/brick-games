@@ -119,24 +119,71 @@ def test_without_keys_nothing_is_fetched_but_a_cache_is_used(tmp_path, api):
     assert igdb and api == []
 
 
-def test_a_failed_refresh_keeps_the_old_list_and_bad_keys_stop_igdb(tmp_path, api, monkeypatch):
-    ratings.Ratings(tmp_path, KEYS).for_system(PS2)
+def age_caches(tmp_path):
     for f in (tmp_path / "ratings").iterdir():
         f.write_text(json.dumps(json.loads(f.read_text()) | {"fetched": 0}))
 
-    def refused(url, body=None, headers=None):
-        api.append(url)
-        raise urllib.error.HTTPError(url, 401, "Unauthorized", {}, None)
 
-    monkeypatch.setattr(ratings, "request", refused)
+@pytest.mark.parametrize("failure", [
+    urllib.error.HTTPError(ratings.TWITCH_TOKEN, 401, "Unauthorized", {}, None),  # a bad key
+    urllib.error.URLError("connection refused"),  # no connection
+    TimeoutError("timed out"),
+    RuntimeError("anything else at all"),
+])
+def test_a_failing_source_keeps_the_old_list_is_counted_and_asked_once(tmp_path, api, monkeypatch, failure):
+    ratings.Ratings(tmp_path, KEYS).for_system(PS2)
+    age_caches(tmp_path)
+
+    def broken(url, body=None, headers=None):
+        api.append(url)
+        raise failure
+
+    monkeypatch.setattr(ratings, "request", broken)
     api.clear()
     rater = ratings.Ratings(tmp_path, KEYS)
     igdb, rawg = rater.for_system(PS2)
     assert igdb and rawg  # the old lists
-    assert rater.igdb_down
-    api.clear()
-    rater.for_system(SNES)  # no cache, and IGDB isn't asked again
-    assert not any(u.startswith(ratings.TWITCH_TOKEN) or u == ratings.IGDB_GAMES for u in api)
+    assert rater.down == {"igdb", "rawg"}
+    asked = len(api)
+    assert rater.for_system(SNES) == ({}, {})  # no cache, and nothing asked again
+    assert len(api) == asked
+    assert rater.results["igdb"] == {"fetched": 0, "cached": 0, "error": 2, "no_key": 0}
+
+
+def test_an_unexpected_answer_does_not_raise(tmp_path, api, monkeypatch):
+    def odd(url, body=None, headers=None):
+        if url.startswith(ratings.TWITCH_TOKEN):
+            return {"access_token": "t"}
+        return {"message": "not a list of games"}  # IGDB answering something else
+
+    monkeypatch.setattr(ratings, "request", odd)
+    rater = ratings.Ratings(tmp_path, KEYS)
+    assert rater.for_system(SNES) == ({}, {})
+    assert rater.results["igdb"]["error"] == 1
+
+
+@pytest.mark.parametrize("content", ["not json", '["a list"]', '{"records": "not a list"}'])
+def test_a_corrupt_cache_is_fetched_again(tmp_path, api, content):
+    (tmp_path / "ratings").mkdir()
+    (tmp_path / "ratings" / "igdb-snes.json").write_text(content)
+    rater = ratings.Ratings(tmp_path, KEYS)
+    igdb, _ = rater.for_system(SNES)
+    assert igdb and rater.results["igdb"]["fetched"] == 1
+
+
+def test_results_count_fetched_cached_and_no_key(tmp_path, api):
+    rater = ratings.Ratings(tmp_path, {k: v for k, v in KEYS.items() if k != "RAWG_KEY"})
+    rater.for_system(PS2)
+    rater.for_system(PS2)
+    assert rater.results == {"igdb": {"fetched": 1, "cached": 1, "error": 0, "no_key": 0},
+                             "rawg": {"fetched": 0, "cached": 0, "error": 0, "no_key": 2}}
+
+
+def test_a_cache_that_cannot_be_written_still_gives_the_list(tmp_path, api):
+    (tmp_path / "ratings").write_text("a file where the folder should be")
+    rater = ratings.Ratings(tmp_path, KEYS)
+    igdb, _ = rater.for_system(SNES)
+    assert igdb and rater.results["igdb"]["fetched"] == 1
 
 
 def test_a_system_without_platforms_has_no_ratings(tmp_path, api):

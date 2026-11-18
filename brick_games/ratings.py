@@ -10,10 +10,16 @@ Metacritic has no API, so its score comes from RAWG, which carries it.
   have one (systems.yaml `rawg`). Metacritic starts in about 1995, so the
   8- and 16-bit systems have none.
 
-Both are optional: without credentials (or with a source down) the catalog
-lists every game as before, without the missing scores. Each system's list is
-kept in DATA/ratings/<source>-<system>.json and fetched again after a week;
-a failed refresh keeps the old list.
+Both are optional: without credentials the catalog lists every game as
+before, without the missing scores. Each system's list is kept in
+DATA/ratings/<source>-<system>.json and fetched again after a week.
+
+A source never fails the scan (the user, 2026-11-18): whatever goes wrong
+(no connection, a bad key, an answer that isn't what's expected), the scan
+logs a warning, keeps the last list, stops asking that source for the rest of
+the run, and counts it in `results`. The scan pushes those counts as
+games_ratings_fetches{source,result}; brick9000's board shows a failure in
+amber and pages nobody.
 
 Matching is by `key`: sources.norm without accents ("Pokémon" is "pokemon").
 A name with no exact match takes a longer one that starts with it, if just one
@@ -27,7 +33,6 @@ import json
 import os
 import time
 import unicodedata
-import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -48,8 +53,13 @@ IGDB_PAUSE = 0.3  # IGDB allows 4 requests a second
 MAX_AGE = 7 * 24 * 3600
 MIN_PREFIX = 8  # a prefix match needs at least this many characters of key
 TIMEOUT = 60
-# A source down, a bad answer or a bad key: URLError and HTTPError are OSErrors.
-ERRORS = (OSError, ValueError, KeyError, TypeError)
+SOURCES = ("igdb", "rawg")
+# What happened to each system's list, per source, in one scan:
+#   fetched  asked the source and got it
+#   cached   the kept list was fresh enough
+#   error    the source failed (the kept list, if any, was used)
+#   no_key   no credentials for the source
+RESULTS = ("fetched", "cached", "error", "no_key")
 
 
 def key(name: str) -> str:
@@ -137,7 +147,8 @@ class Ratings:
         self.igdb_secret = env.get("IGDB_CLIENT_SECRET", "")
         self.rawg_key = env.get("RAWG_KEY", "")
         self._token: str | None = None
-        self.igdb_down = False
+        self.down: set[str] = set()  # sources that failed this run: not asked again
+        self.results = {source: dict.fromkeys(RESULTS, 0) for source in SOURCES}
 
     def token(self) -> str:
         if self._token is None:
@@ -147,20 +158,15 @@ class Ratings:
         return self._token
 
     def igdb(self, platforms: list[int]) -> list[dict]:
-        try:
-            headers = {"Client-ID": self.igdb_id, "Authorization": f"Bearer {self.token()}"}
-            out, after = [], 0
-            while True:
-                time.sleep(IGDB_PAUSE)
-                page = request(IGDB_GAMES, igdb_query(platforms, after).encode(), headers)
-                out += [igdb_record(g) for g in page]
-                if len(page) < IGDB_PAGE:
-                    return out
-                after = page[-1]["id"]
-        except urllib.error.HTTPError as e:
-            if e.code in (400, 401, 403):
-                self.igdb_down = True  # bad credentials: don't try the other systems
-            raise
+        headers = {"Client-ID": self.igdb_id, "Authorization": f"Bearer {self.token()}"}
+        out, after = [], 0
+        while True:
+            time.sleep(IGDB_PAUSE)
+            page = request(IGDB_GAMES, igdb_query(platforms, after).encode(), headers)
+            out += [igdb_record(g) for g in page]
+            if len(page) < IGDB_PAGE:
+                return out
+            after = page[-1]["id"]
 
     def rawg(self, platforms: list[int]) -> list[dict]:
         query = urllib.parse.urlencode({"key": self.rawg_key, "platforms": ",".join(map(str, platforms)),
@@ -173,9 +179,10 @@ class Ratings:
         return out
 
     def cached(self, source: str, system: dict, fetch: Callable[[list[int]], list[dict]],
-               can_fetch: bool) -> list[dict]:
+               has_key: bool) -> list[dict]:
         """The system's records: the cache while it's fresh and for the same
-        platforms, else fetched (and kept); the old cache if that fails."""
+        platforms, else fetched (and kept); the old cache if that fails.
+        Never raises."""
         platforms = system.get(source)
         if not platforms:
             return []
@@ -184,24 +191,49 @@ class Ratings:
             old = json.loads(path.read_text())
         except (OSError, ValueError):
             old = None
+        if not isinstance(old, dict) or not isinstance(old.get("records"), list):
+            old = None  # missing, or not a list this code wrote
         last = old["records"] if old else []
         fresh = bool(old) and old.get("platforms") == platforms and time.time() - old.get("fetched", 0) < MAX_AGE
-        if fresh or not can_fetch:
+        if fresh:
+            self.results[source]["cached"] += 1
+            return last
+        if not has_key:
+            self.results[source]["no_key"] += 1
+            return last
+        if source in self.down:
+            self.results[source]["error"] += 1
             return last
         try:
             records = fetch(platforms)
-        except ERRORS as e:
-            log.warning("ratings unreachable; keeping the last list", source=source, system=system["id"], error=str(e))
+        except Exception as e:  # anything at all: the scan goes on (module docstring)
+            self.down.add(source)
+            self.results[source]["error"] += 1
+            log.warning("ratings source failed; keeping the last list and not asking it again this run",
+                        source=source, system=system["id"], error=f"{type(e).__name__}: {e}")
             return last
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".part")
-        tmp.write_text(json.dumps({"fetched": int(time.time()), "platforms": platforms, "records": records}))
-        tmp.replace(path)
+        self.results[source]["fetched"] += 1
         log.info("ratings fetched", source=source, system=system["id"], games=len(records))
+        try:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".part")
+            tmp.write_text(json.dumps({"fetched": int(time.time()), "platforms": platforms, "records": records}))
+            tmp.replace(path)
+        except OSError as e:  # this run still has the list; the next one asks again
+            log.warning("ratings not cached", source=source, system=system["id"], error=str(e))
         return records
 
     def for_system(self, system: dict) -> tuple[dict[str, dict], dict[str, dict]]:
         """(IGDB index, RAWG index) for one system, each key(name) -> scores."""
-        igdb = self.cached("igdb", system, self.igdb, bool(self.igdb_id and self.igdb_secret) and not self.igdb_down)
-        rawg = self.cached("rawg", system, self.rawg, bool(self.rawg_key))
-        return build_index(igdb), build_index(rawg)
+        sources = (("igdb", self.igdb, bool(self.igdb_id and self.igdb_secret)),
+                   ("rawg", self.rawg, bool(self.rawg_key)))
+        indexes = []
+        for source, fetch, has_key in sources:
+            try:
+                indexes.append(build_index(self.cached(source, system, fetch, has_key)))
+            except Exception as e:  # a list that can't be read: no scores, the scan goes on
+                self.results[source]["error"] += 1
+                log.warning("ratings list unusable", source=source, system=system["id"],
+                            error=f"{type(e).__name__}: {e}")
+                indexes.append({})
+        return indexes[0], indexes[1]
