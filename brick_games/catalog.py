@@ -66,6 +66,7 @@ class Stats:
     def __init__(self) -> None:
         self.per_system: dict[str, dict[str, int]] = {}
         self.fetches = {"ok": 0, "missing": 0, "error": 0, "converted": 0}
+        self.ratings: dict[str, dict[str, int]] = {}  # source -> result -> systems (ratings.RESULTS)
 
     def fetched(self, result: str) -> None:
         self.fetches[result] += 1
@@ -276,6 +277,7 @@ def scan(root: Path, data: Path, stats: Stats | None = None, rater: ratings.Rati
         games += found
         if found:
             systems.append({k: system[k] for k in ("id", "name", "devices")} | {"count": len(found)})
+    stats.ratings = rater.results
     catalog = {"generated": int(time.time()), "devices": config["devices"], "systems": systems, "games": games}
     if unchanged(data / "catalog.json", catalog):
         # Left alone, so its ETag stays and browsers keep their copy.

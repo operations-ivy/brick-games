@@ -27,10 +27,17 @@ devices play each system (brick-k8s-config#108).
   `igdb` and `rawg` in `systems.yaml`. The keys (`IGDB_CLIENT_ID` and
   `IGDB_CLIENT_SECRET`, a Twitch app's; `RAWG_KEY`) come from the
   `brick-games-ratings` Secret, sealed in brick-k8s-secrets. Without them
-  there are no ratings and everything else works. Lists are kept in
-  `DATA/ratings` and fetched again weekly; a failed fetch keeps the last list.
+  there are no ratings and everything else works. RAWG is skipped for now
+  (the user, 2026-11-18): the Secret has no `RAWG_KEY`. Lists are kept in
+  `DATA/ratings` and fetched again weekly.
+- **A ratings source never fails the scan** (the user, 2026-11-18): no
+  connection, a bad key, or an odd answer is a warning in the log, the last
+  list is kept, and the source isn't asked again that run. It's pushed as
+  `games_ratings_fetches{source,result="error"}` and brick9000's board shows
+  it in amber (brick-cicd-config, `checks.py`). Nothing alerts or pages on it.
   The page shows them in each game's details, the best one (Metascore, else
-  critics, else users) on its card, and sorts by it under "Best rated".
+  critics, else users) on its card, sorts by it under "Best rated", and
+  filters by it (90, 80, 70 or 60 and up, rated, not rated).
 - **The page** (`python -m brick_games web`) serves `catalog.json`, the art,
   `/health`, `/ready` and `/metrics`. It's read-only and has no ROM access.
 - **Plays on**: each system's `devices` in `systems.yaml`, as `good`, `ok` or
@@ -92,8 +99,10 @@ release bumps `version` in `pyproject.toml` and `newTag` in
 
 - **Scan:** `brick-games-scan` CronJob, 03:30 every night, at most 4 hours, on
   brick2000 (`chuck.io/storage-node`), with the ROMs as a read-only hostPath.
-  It pushes `games_catalog_*` (`with_rating` among them) and
-  `games_art_fetches` to the Pushgateway.
+  It pushes `games_catalog_*` (`with_rating` among them),
+  `games_art_fetches` and `games_ratings_fetches` (`source`: igdb, rawg;
+  `result`: fetched, cached, error, no_key; counts of systems) to the
+  Pushgateway.
 - **Web:** `brick-games-web`, one replica on brick2000, with the data volume
   read-only.
 - **Network:** default-deny. The scan reaches only DNS, traces, the

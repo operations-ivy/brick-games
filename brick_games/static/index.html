@@ -91,6 +91,11 @@
       <option value="">Any device</option>
     </select>
     <select id="genre" aria-label="Genre"><option value="">Any genre</option></select>
+    <select id="rating" aria-label="Rating">
+      <option value="">Any rating</option><option value="90">90 and up</option><option value="80">80 and up</option>
+      <option value="70">70 and up</option><option value="60">60 and up</option>
+      <option value="rated">Rated</option><option value="unrated">Not rated</option>
+    </select>
     <select id="sort" aria-label="Sort">
       <option value="title">A–Z</option><option value="year">Oldest first</option><option value="-year">Newest first</option><option value="-score">Best rated</option>
     </select>
@@ -107,7 +112,7 @@
 "use strict";
 const PAGE = 120;
 let cat = null, shown = 0, matches = [];
-const state = { q: "", system: "", device: "", genre: "", sort: "title" };
+const state = { q: "", system: "", device: "", genre: "", rating: "", sort: "title" };
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
@@ -141,6 +146,15 @@ const score = (g) => g.metascore ?? g.critics ?? g.users ?? null;
 const tone = (n) => (n >= 75 ? "score" : n >= 50 ? "score mid" : "score low");
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
+// The rating filter: a floor on the card's score, or rated / not rated.
+function meetsRating(g) {
+  const s = score(g);
+  if (!state.rating) return true;
+  if (state.rating === "rated") return s !== null;
+  if (state.rating === "unrated") return s === null;
+  return s !== null && s >= Number(state.rating);
+}
+
 function playable(g, device) {
   const v = cat.bySystem[g.system].devices[device];
   return v === "good" || v === "ok";
@@ -152,6 +166,7 @@ function filter() {
     (!state.system || g.system === state.system) &&
     (!state.device || playable(g, state.device)) &&
     (!state.genre || g.genre === state.genre) &&
+    meetsRating(g) &&
     words.every((w) => g.hay.includes(w)));
   const year = (g) => parseInt(g.year) || (state.sort === "year" ? 9999 : 0);
   if (state.sort === "year") matches.sort((a, b) => year(a) - year(b) || a.title.localeCompare(b.title));
@@ -221,7 +236,7 @@ function open(id) {
 function readHash() {
   const p = new URLSearchParams(location.hash.slice(1));
   for (const k of Object.keys(state)) if (p.get(k)) state[k] = p.get(k);
-  $("q").value = state.q; $("device").value = state.device; $("genre").value = state.genre; $("sort").value = state.sort;
+  $("q").value = state.q; $("device").value = state.device; $("genre").value = state.genre; $("rating").value = state.rating; $("sort").value = state.sort;
   chips();
 }
 function writeHash() {
@@ -231,7 +246,7 @@ function writeHash() {
 
 let timer;
 $("q").addEventListener("input", (e) => { clearTimeout(timer); timer = setTimeout(() => { state.q = e.target.value; render(); }, 120); });
-for (const k of ["device", "genre", "sort"]) $(k).addEventListener("change", (e) => { state[k] = e.target.value; render(); });
+for (const k of ["device", "genre", "rating", "sort"]) $(k).addEventListener("change", (e) => { state[k] = e.target.value; render(); });
 $("systems").addEventListener("click", (e) => {
   const c = e.target.closest(".chip"); if (!c) return;
   state.system = c.dataset.s; chips(); render();
