@@ -24,7 +24,9 @@ amber and pages nobody.
 Matching is by `key`: sources.norm without accents ("Pokémon" is "pokemon").
 A name with no exact match takes a longer one that starts with it, if just one
 does ("Adventure Island II" finds "Adventure Island II: Aliens in Paradise").
-Unlike art, a shorter one never matches: "Mega Man 7" isn't "Mega Man".
+Unlike art, a shorter one never matches: "Mega Man 7" isn't "Mega Man". Nor
+does a longer one that goes on with a number: "Earthworm Jim 2" isn't
+"Earthworm Jim" (a sequel, not a subtitle).
 """
 
 from __future__ import annotations
@@ -37,13 +39,14 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 from collections.abc import Callable
-from typing import Any
+from typing import Any, TypeVar
 
 import brick_observe
 
 from . import sources
 
 log = brick_observe.get_logger(__name__)
+T = TypeVar("T")  # what an index holds: scores (ratings), file lists (manuals)
 TWITCH_TOKEN = "https://id.twitch.tv/oauth2/token"  # secret-scan: allow (public endpoint URL)
 IGDB_GAMES = "https://api.igdb.com/v4/games"
 RAWG_GAMES = "https://api.rawg.io/api/games"
@@ -67,13 +70,14 @@ def key(name: str) -> str:
     return sources.norm(plain)
 
 
-def match(index: dict[str, dict], name: str) -> dict | None:
+def match(index: dict[str, T], name: str) -> T | None:
     k = key(name)
     if k in index:
         return index[k]
     if len(k) < MIN_PREFIX:
         return None
-    longer = [v for i, v in index.items() if i.startswith(k)]
+    # a subtitle, not a sequel: what follows the name mustn't start with a number
+    longer = [v for i, v in index.items() if i.startswith(k) and not i.removeprefix(k)[:1].isdigit()]
     return longer[0] if len(longer) == 1 else None
 
 

@@ -10,7 +10,8 @@ their parent set (clones are variants of the same game).
 
 Art comes from libretro's thumbnails into MEDIA (box art, title screen,
 screenshot; downscaled, fetched once and kept), facts from libretro-database,
-ratings from IGDB and RAWG when their keys are set (ratings.py).
+ratings from IGDB and RAWG when their keys are set (ratings.py), manuals
+from the Internet Archive's manual sets into MEDIA (manuals.py).
 The catalog names each picture with `?v=<its content hash>`, so the page can
 cache art for a year and still see a changed picture as a new URL.
 A system whose sources can't be reached still lists its games, without art.
@@ -33,7 +34,7 @@ import brick_observe
 import yaml
 from PIL import Image
 
-from . import ratings, sources
+from . import manuals, ratings, sources
 
 log = brick_observe.get_logger(__name__)
 SYSTEMS_FILE = Path(__file__).with_name("systems.yaml")
@@ -55,6 +56,7 @@ ART_SIZES = {
 }
 ART_VERSION_LEN = 8
 WORKERS = 8
+MANUAL_WORKERS = 4  # the Internet Archive is shared; don't hammer it
 # A failed download or a bad picture: OSError covers URLError, timeouts and PIL's
 # UnidentifiedImageError; ValueError a picture PIL can't decode.
 FETCH_ERRORS = (OSError, ValueError)
@@ -67,6 +69,7 @@ class Stats:
         self.per_system: dict[str, dict[str, int]] = {}
         self.fetches = {"ok": 0, "missing": 0, "error": 0, "converted": 0}
         self.ratings: dict[str, dict[str, int]] = {}  # source -> result -> systems (ratings.RESULTS)
+        self.manuals: dict[str, int] = {}  # result -> games (manuals.RESULTS)
 
     def fetched(self, result: str) -> None:
         self.fetches[result] += 1
@@ -199,8 +202,42 @@ def get_art(media: Path, system: dict, kind: str, thumb: str, dest_name: str) ->
         return None, "error"
 
 
+def add_manuals(games: list[dict], system: dict, shelf: manuals.Manuals) -> None:
+    """Each game's manual (game["manual"]): kept ones from disk, new ones
+    matched in the system's sets and downloaded. Never raises: matching and
+    downloading fail apart, so a failed match keeps what's on disk and a
+    failed download keeps the others."""
+    jobs: list[tuple[dict, manuals.Entry]] = []
+    try:
+        index = None
+        for game in games:
+            if rel := shelf.on_disk(system, game["id"]):
+                game["manual"] = rel
+                shelf.count("cached")
+                continue
+            if not system.get("manuals"):
+                continue
+            if index is None:  # only asked when a game still has no manual
+                index = shelf.index(system)
+            short = game["key"] if system.get("arcade") else None
+            if entry := manuals.find(index, game["source_name"], short):
+                jobs.append((game, entry))
+            else:
+                shelf.count("none")
+    except Exception as e:  # manuals never fail the scan (manuals.py)
+        log.warning("manuals not matched", system=system["id"], error=f"{type(e).__name__}: {e}")
+    with cf.ThreadPoolExecutor(MANUAL_WORKERS) as pool:
+        futures = {pool.submit(shelf.fetch, system, game["id"], entry): game for game, entry in jobs}
+        for future in cf.as_completed(futures):
+            try:
+                if rel := future.result():  # fetch doesn't raise; this is the last net
+                    futures[future]["manual"] = rel
+            except Exception as e:
+                log.warning("manual not kept", system=system["id"], error=f"{type(e).__name__}: {e}")
+
+
 def scan_system(root: Path, media: Path, system: dict, fbneo: tuple[dict, dict], stats: Stats,
-                rater: ratings.Ratings) -> list[dict]:
+                rater: ratings.Ratings, shelf: manuals.Manuals) -> list[dict]:
     titles, parents = fbneo if system.get("arcade") else ({}, {})
     files = find_files(root, system)
     games = group(files, system, titles, parents)
@@ -233,9 +270,11 @@ def scan_system(root: Path, media: Path, system: dict, fbneo: tuple[dict, dict],
                 stats.fetched(result)
             if rel:
                 game["art"][sources.KIND_KEYS[kind]] = rel
+    add_manuals(games, system, shelf)
     stats.per_system[system["id"]] = {"files": len(files), "games": len(games),
                                       "with_box_art": sum(1 for g in games if "box" in g["art"]),
-                                      "with_rating": sum(1 for g in games if ratings.has_score(g))}
+                                      "with_rating": sum(1 for g in games if ratings.has_score(g)),
+                                      "with_manual": sum(1 for g in games if "manual" in g)}
     for game in games:
         del game["key"], game["source_name"]
         game["files"] = [str(f.relative_to(root)) for f in game["files"]]
@@ -260,9 +299,11 @@ def unchanged(path: Path, catalog: dict) -> bool:
         return False
 
 
-def scan(root: Path, data: Path, stats: Stats | None = None, rater: ratings.Ratings | None = None) -> dict:
+def scan(root: Path, data: Path, stats: Stats | None = None, rater: ratings.Ratings | None = None,
+         shelf: manuals.Manuals | None = None) -> dict:
     stats = stats or Stats()
     rater = rater or ratings.Ratings(data)
+    shelf = shelf or manuals.Manuals(data / "media")
     config = load_systems()
     media = data / "media"
     media.mkdir(parents=True, exist_ok=True)
@@ -273,11 +314,12 @@ def scan(root: Path, data: Path, stats: Stats | None = None, rater: ratings.Rati
         fbneo = ({}, {})
     games, systems = [], []
     for system in config["systems"]:
-        found = scan_system(root, media, system, fbneo, stats, rater)
+        found = scan_system(root, media, system, fbneo, stats, rater, shelf)
         games += found
         if found:
             systems.append({k: system[k] for k in ("id", "name", "devices")} | {"count": len(found)})
     stats.ratings = rater.results
+    stats.manuals = shelf.results
     catalog = {"generated": int(time.time()), "devices": config["devices"], "systems": systems, "games": games}
     if unchanged(data / "catalog.json", catalog):
         # Left alone, so its ETag stays and browsers keep their copy.

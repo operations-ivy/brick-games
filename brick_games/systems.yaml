@@ -5,6 +5,9 @@
 #   igdb:     IGDB platform ids, for critic and user ratings (ratings.py)
 #   rawg:     RAWG platform ids, for the Metascore; only systems Metacritic
 #             reviewed (about 1995 on)
+#   manuals:  Internet Archive items with one PDF manual per game (manuals.py);
+#             none found for DS (names run together), Game Gear, PC Engine CD
+#             or arcade
 #   exts:     the game files (anything else in the folder is ignored:
 #             .dat, .txt, saves, artwork, per-track .bin of a .cue game)
 #   devices:  device id -> good (full speed) | ok (most games; some slow or
@@ -25,6 +28,7 @@ systems:
     folders: [nes]
     libretro: "Nintendo - Nintendo Entertainment System"
     igdb: [18, 99, 51]
+    manuals: [NESManuals]
     exts: [nes, fds]
     devices: {brick9000: good, rp2plus: good, rg476h: good}
   - id: snes
@@ -32,6 +36,7 @@ systems:
     folders: [snes]
     libretro: "Nintendo - Super Nintendo Entertainment System"
     igdb: [19, 58]
+    manuals: [SNESManuals]
     exts: [smc, sfc]
     devices: {brick9000: good, rp2plus: good, rg476h: good}
   - id: gb
@@ -39,6 +44,7 @@ systems:
     folders: [gb, gbc]
     libretro: "Nintendo - Game Boy"
     igdb: [33, 22]
+    manuals: [NintendoGameBoyManuals, NintendoGameBoyColorManuals]
     exts: [gb, gbc, zip]
     devices: {brick9000: good, rp2plus: good, rg476h: good}
   - id: gba
@@ -46,6 +52,7 @@ systems:
     folders: [gba]
     libretro: "Nintendo - Game Boy Advance"
     igdb: [24]
+    manuals: [NintendoGameBoyAdvanceManuals]
     rawg: [24]
     exts: [gba]
     devices: {brick9000: good, rp2plus: good, rg476h: good}
@@ -54,6 +61,7 @@ systems:
     folders: [n64]
     libretro: "Nintendo - Nintendo 64"
     igdb: [4]
+    manuals: [Nintendo64Manuals_201812]
     rawg: [83]
     exts: [n64, z64, v64]
     devices: {brick9000: no, rp2plus: ok, rg476h: good}
@@ -70,6 +78,7 @@ systems:
     folders: [gc]
     libretro: "Nintendo - GameCube"
     igdb: [21]
+    manuals: [NintendoGameCubeManuals]
     rawg: [105]
     exts: [rvz, iso, gcz]
     devices: {brick9000: no, rp2plus: no, rg476h: ok}
@@ -78,6 +87,7 @@ systems:
     folders: [Wii]
     libretro: "Nintendo - Wii"
     igdb: [5]
+    manuals: [wii-manuals_202508]
     rawg: [11]
     exts: [wbfs, rvz, iso]
     devices: {brick9000: no, rp2plus: no, rg476h: ok}
@@ -86,6 +96,7 @@ systems:
     folders: [megadrive]
     libretro: "Sega - Mega Drive - Genesis"
     igdb: [29]
+    manuals: [SEGAGenesisMegaDriveManuals]
     exts: [bin, md, gen, smd]
     devices: {brick9000: good, rp2plus: good, rg476h: good}
   - id: gamegear
@@ -100,6 +111,7 @@ systems:
     folders: [sega32x]
     libretro: "Sega - 32X"
     igdb: [30]
+    manuals: [SEGA32XManuals_201812]
     exts: [32x]
     devices: {brick9000: good, rp2plus: good, rg476h: good}
   - id: segacd
@@ -107,6 +119,7 @@ systems:
     folders: [segacd]
     libretro: "Sega - Mega-CD - Sega CD"
     igdb: [78]
+    manuals: [SEGACDManuals]
     exts: [chd, cue]
     devices: {brick9000: good, rp2plus: good, rg476h: good}
   - id: saturn
@@ -114,6 +127,7 @@ systems:
     folders: [segasaturn]
     libretro: "Sega - Saturn"
     igdb: [32]
+    manuals: [SEGASaturnManuals_201812]
     rawg: [107]
     exts: [cue, chd]
     devices: {brick9000: no, rp2plus: no, rg476h: good}
@@ -122,6 +136,7 @@ systems:
     folders: [Dreamcast]
     libretro: "Sega - Dreamcast"
     igdb: [23]
+    manuals: [SEGADreamcastManuals_201812]
     rawg: [106]
     exts: [chd, cdi, gdi]
     devices: {brick9000: ok, rp2plus: good, rg476h: good}
@@ -130,6 +145,7 @@ systems:
     folders: [pcengine]
     libretro: "NEC - PC Engine - TurboGrafx 16"
     igdb: [86]
+    manuals: [NECTurboGrafx-16Manuals]
     exts: [pce]
     devices: {brick9000: no, rp2plus: good, rg476h: good}
   - id: pcecd
@@ -144,6 +160,7 @@ systems:
     folders: [psx]
     libretro: "Sony - PlayStation"
     igdb: [7]
+    manuals: [SonyPlaystationManuals]
     rawg: [27]
     exts: [chd, cue, pbp]
     devices: {brick9000: good, rp2plus: good, rg476h: good}
@@ -152,6 +169,7 @@ systems:
     folders: [PS2]
     libretro: "Sony - PlayStation 2"
     igdb: [8]
+    manuals: [SonyPlaystation2Manuals_201812]
     rawg: [15]
     exts: [iso, chd]
     devices: {brick9000: no, rp2plus: no, rg476h: ok}
@@ -160,6 +178,7 @@ systems:
     folders: [psp]
     libretro: "Sony - PlayStation Portable"
     igdb: [38]
+    manuals: [SonyPSPManuals]
     rawg: [17]
     exts: [iso, cso, pbp]
     devices: {brick9000: ok, rp2plus: no, rg476h: good}
@@ -168,6 +187,7 @@ systems:
     folders: [neogeo]
     libretro: "SNK - Neo Geo"
     igdb: [80, 79]
+    manuals: [SNKNeoGeoMVSManuals]
     exts: [zip]
     arcade: true
     devices: {brick9000: good, rp2plus: good, rg476h: good}

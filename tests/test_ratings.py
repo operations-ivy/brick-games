@@ -31,6 +31,15 @@ def test_match_exact_then_one_longer_name_never_a_shorter_one():
     assert ratings.match(index, "Mega Man X (USA).sfc") is None  # X2 or X3: ambiguous
 
 
+def test_match_takes_a_subtitle_but_not_a_sequel():
+    index = ratings.build_index([
+        {"names": ["Earthworm Jim 2"], "critics": 90, "critic_reviews": 3},
+        {"names": ["Twin Cobra: Desert Attack Helicopter"], "critics": 70, "critic_reviews": 2},
+    ])
+    assert ratings.match(index, "Earthworm Jim (USA).sfc") is None
+    assert ratings.match(index, "Twin Cobra (USA).md")["critics"] == 70
+
+
 def test_build_index_names_alternatives_and_keeps_the_most_reviewed():
     index = ratings.build_index([
         {"names": ["Contra III: The Alien Wars", "Super Probotector"], "critics": 88, "critic_reviews": 9},
