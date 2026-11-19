@@ -7,6 +7,8 @@ the cached art. Nothing here touches the ROMs.
     GET  /api/catalog       catalog.json (systems, devices, games)
     GET  /media/<path>.avif art from the cache (paths checked to stay inside it;
                             .png until the cache is converted)
+    GET  /media/<system>/manuals/<id>.pdf
+                            a game's manual (manuals.py), streamed
     GET  /health /ready /metrics
 
 Caching (README "Caching"): the page and the catalog carry a strong ETag (the
@@ -25,11 +27,13 @@ import gzip
 import hashlib
 import os
 import re
+import shutil
 import threading
 from dataclasses import dataclass
 from email.utils import formatdate, parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import BinaryIO
 from urllib.parse import parse_qs
 
 import brick_observe
@@ -38,8 +42,10 @@ from prometheus_client import Counter
 
 log = brick_observe.get_logger(__name__)
 PAGE_FILE = Path(__file__).parent / "static" / "index.html"
-MEDIA_PATH = re.compile(r"^/media/(?P<rel>[a-z0-9]+/Named_(?:Boxarts|Titles|Snaps)/[0-9a-f]{16}\.(?P<ext>avif|png))$")
-MEDIA_TYPES = {"avif": "image/avif", "png": "image/png"}
+MEDIA_PATH = re.compile(r"^/media/(?P<rel>[a-z0-9]+/(?:Named_(?:Boxarts|Titles|Snaps)/[0-9a-f]{16}\.(?P<art>avif|png)"
+                        r"|manuals/[0-9a-f]{16}\.(?P<manual>pdf)))$")
+MEDIA_TYPES = {"avif": "image/avif", "png": "image/png", "pdf": "application/pdf"}
+STREAM_CHUNK = 256 * 1024  # media is sent in pieces: a manual can be tens of MB
 REQUESTS = Counter("games_web_requests_total", "Requests, by route and status", ["route", "status"])
 SENT_BYTES = Counter("games_web_response_bytes_total", "Body bytes sent, by route and content encoding",
                      ["route", "encoding"])
@@ -141,22 +147,35 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args: object) -> None:  # quiet: requests are counted in /metrics instead
         pass
 
-    def _respond(self, status: int, body: bytes, kind: str | None, route: str, cache: str = "no-cache",
-                 headers: dict[str, str] | None = None, encoding: str = "identity") -> None:
+    def _start(self, status: int, kind: str | None, length: int | None, cache: str,
+               headers: dict[str, str] | None) -> None:
         self.send_response(status)
         if kind:
             self.send_header("Content-Type", kind)
-        if status != 304:
-            self.send_header("Content-Length", str(len(body)))
+        if length is not None:
+            self.send_header("Content-Length", str(length))
         self.send_header("Cache-Control", cache)
         self.send_header("X-Content-Type-Options", "nosniff")
         for name, value in (headers or {}).items():
             self.send_header(name, value)
         self.end_headers()
+
+    def _respond(self, status: int, body: bytes, kind: str | None, route: str, cache: str = "no-cache",
+                 headers: dict[str, str] | None = None, encoding: str = "identity") -> None:
+        self._start(status, kind, None if status == 304 else len(body), cache, headers)
         if self.command != "HEAD" and status != 304:
             self.wfile.write(body)
             SENT_BYTES.labels(route, encoding).inc(len(body))
         REQUESTS.labels(route, str(status)).inc()
+
+    def _stream(self, f: BinaryIO, size: int, kind: str, route: str, cache: str, headers: dict[str, str]) -> None:
+        """A 200 with a file's bytes sent in pieces, not read whole (a manual
+        can be tens of MB; the pod has 256 MiB)."""
+        self._start(200, kind, size, cache, headers)
+        if self.command != "HEAD":
+            shutil.copyfileobj(f, self.wfile, STREAM_CHUNK)
+            SENT_BYTES.labels(route, "identity").inc(size)
+        REQUESTS.labels(route, "200").inc()
 
     def _not_modified(self, tag: str, modified: float | None) -> bool:
         """RFC 9110 13.2.2: If-None-Match wins; If-Modified-Since counts only without it."""
@@ -193,7 +212,7 @@ class Handler(BaseHTTPRequestHandler):
             route(self, path)
         elif m := MEDIA_PATH.match(path):
             # parse_qs drops blank values: a bare ?v= is not a versioned URL.
-            self._media(m["rel"], MEDIA_TYPES[m["ext"]], "v" in parse_qs(query))
+            self._media(m["rel"], MEDIA_TYPES[m["art"] or m["manual"]], "v" in parse_qs(query))
         else:
             self._respond(404, b"not found", "text/plain", "other")
 
@@ -226,8 +245,8 @@ class Handler(BaseHTTPRequestHandler):
             headers = {"ETag": f'"{tag}"', "Last-Modified": formatdate(st.st_mtime, usegmt=True)}
             if self._not_modified(tag, st.st_mtime):
                 self._respond(304, b"", None, "/media", cache, headers)
-            else:
-                self._respond(200, f.read(), content_type, "/media", cache, headers)
+                return
+            self._stream(f, st.st_size, content_type, "/media", cache, headers)
 
     def _health(self, path: str) -> None:
         ok = path == "/health" or (self.data / "catalog.json").exists()

@@ -257,14 +257,18 @@ function open(id) {
     const word = { good: "plays", ok: "mostly", no: "no" }[v];
     return `<span class="badge ${v}" title="${esc(d.what)}">${esc(d.name)}: ${word}</span>`;
   }).join("");
-  const manual = "https://archive.org/search?query=" + encodeURIComponent(`${g.title} ${s.name} manual`);
+  // A kept manual opens from the LAN (manuals.py); otherwise, a search on the Internet Archive.
+  const manual = g.manual
+    ? `<a href="/media/${esc(g.manual)}" target="_blank" rel="noopener">Manual (PDF) ↗</a>`
+    : `<a href="https://archive.org/search?query=${encodeURIComponent(`${g.title} ${s.name} manual`)}"
+         target="_blank" rel="noopener">Find the manual ↗</a>`;
   const shots = ["title", "snap"].filter((k) => g.art[k]).map((k) => `<img src="/media/${esc(g.art[k])}" alt="${k}">`).join("");
   $("dlg").innerHTML = `<button class="close" id="x">CLOSE</button><div class="dlg">
     <div class="box">${g.art.box ? `<img src="/media/${esc(g.art.box)}" alt="box art">` : ""}<div class="shots">${shots}</div></div>
     <div><div class="sys">${esc(s.name)}</div><h2>${esc(g.title)}</h2>
       <dl>${facts}${scores}</dl>
       <h3>Plays on</h3><div class="plays">${plays}</div>
-      <a href="${manual}" target="_blank" rel="noopener">Find the manual ↗</a>
+      ${manual}
       <h3>Files</h3><div class="files">${g.files.map(esc).join("\n")}</div></div></div>`;
   $("x").onclick = () => $("dlg").close();
   $("dlg").showModal();

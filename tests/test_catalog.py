@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from brick_games import catalog, ratings, sources, web
+from brick_games import catalog, manuals, ratings, sources, web
 
 
 def png(w: int = 600, h: int = 800) -> bytes:
@@ -101,6 +101,9 @@ def offline(monkeypatch):
     scores = {"snes": ratings.build_index([{"names": ["Final Fight"], "critics": 77, "critic_reviews": 6}]),
               "dreamcast": ratings.build_index([{"names": ["Shenmue"], "metascore": 88}])}
     monkeypatch.setattr(ratings.Ratings, "for_system", lambda self, system: (scores.get(system["id"], {}),))
+    monkeypatch.setattr(manuals, "item_index", lambda item: (
+        {ratings.key("Final Fight (USA).pdf"): [manuals.Entry(item, "Final Fight (USA).pdf")]} if item == "SNESManuals" else {}))
+    monkeypatch.setattr(manuals, "get", lambda url: io.BytesIO(b"%PDF-1.4 a manual"))
 
 
 def test_scan_groups_games_fetches_art_and_writes_the_catalog(tmp_path, offline):
@@ -113,6 +116,8 @@ def test_scan_groups_games_fetches_art_and_writes_the_catalog(tmp_path, offline)
     ff = by_title["Final Fight"]
     assert len(ff["files"]) == 2 and ff["year"] == "1991" and ff["genre"] == "Beat'em up"
     assert ff["critics"] == 77 and ff["critic_reviews"] == 6 and "metascore" not in ff
+    manual = ff["manual"].partition("?v=")[0]
+    assert manual.startswith("snes/manuals/") and (data / "media" / manual).read_bytes().startswith(b"%PDF")
     assert by_title["Shenmue"]["metascore"] == 88
     box, _, version = ff["art"]["box"].partition("?v=")
     assert box.endswith(".avif") and (data / "media" / box).exists()
@@ -126,7 +131,8 @@ def test_scan_groups_games_fetches_art_and_writes_the_catalog(tmp_path, offline)
     sf2 = by_title["Street Fighter II"]
     assert sorted(Path(f).name for f in sf2["files"]) == ["sf2.zip", "sf2ua.zip"]
     assert "neogeo" not in json.dumps(cat["games"])
-    assert stats.per_system["snes"] == {"files": 2, "games": 1, "with_box_art": 1, "with_rating": 1}
+    assert stats.per_system["snes"] == {"files": 2, "games": 1, "with_box_art": 1, "with_rating": 1,
+                                        "with_manual": 1}
     assert json.loads((data / "catalog.json").read_text())["games"] == cat["games"]
     # a second scan downloads nothing again
     before = dict(stats.fetches)
@@ -135,6 +141,7 @@ def test_scan_groups_games_fetches_art_and_writes_the_catalog(tmp_path, offline)
     # nothing changed, so the file (and the page's ETag) is left as it was
     assert (data / "catalog.json").stat().st_mtime_ns == written
     assert stats.fetches == before
+    assert stats.manuals["ok"] == 0 and stats.manuals["cached"] == 1  # kept, not downloaded again
     assert {g["title"]: g["art"] for g in again["games"]}["Final Fight"] == ff["art"]
 
 
@@ -147,6 +154,7 @@ def test_scan_without_network_still_lists_games(tmp_path, monkeypatch):
 
     monkeypatch.setattr(sources, "get", down)
     monkeypatch.setattr(ratings, "request", down)
+    monkeypatch.setattr(manuals, "get", down)
     keys = {"IGDB_CLIENT_ID": "i", "IGDB_CLIENT_SECRET": "s", "RAWG_KEY": "k"}  # keys set, network down
     stats = catalog.Stats()
     cat = catalog.scan(roms, data, stats, rater=ratings.Ratings(data, keys))
@@ -208,6 +216,25 @@ def test_web_serves_page_catalog_and_media_only(server):
     assert fetch(base + "/metrics")[0] == 200
 
 
+def test_web_streams_manuals_as_pdf(server):
+    base, data = server
+    pdf = data / "media" / "snes" / "manuals" / "0123456789abcdef.pdf"
+    pdf.parent.mkdir(parents=True)
+    body = b"%PDF-1.4 " + bytes(range(256)) * 4000  # ~1 MB: several stream chunks
+    pdf.write_bytes(body)
+    with urllib.request.urlopen(base + "/media/snes/manuals/0123456789abcdef.pdf?v=1") as r:
+        assert r.headers["Content-Type"] == "application/pdf"
+        assert int(r.headers["Content-Length"]) == len(body) and r.read() == body
+        assert "immutable" in r.headers["Cache-Control"]
+        tag = r.headers["ETag"]
+    assert get(base + "/media/snes/manuals/0123456789abcdef.pdf", {"If-None-Match": tag})[0] == 304
+    head = get(base + "/media/snes/manuals/0123456789abcdef.pdf", method="HEAD")
+    assert head[0] == 200 and head[2] == b""
+    for bad in ("/media/snes/manuals/0123456789abcdef.avif", "/media/snes/Named_Boxarts/0123456789abcdef.pdf",
+                "/media/snes/manuals/../manuals/0123456789abcdef.pdf"):
+        assert fetch(base + bad)[0] == 404
+
+
 def test_publish_sends_each_count_as_a_gauge():
     from brick_games.__main__ import publish
 
@@ -222,12 +249,14 @@ def test_publish_sends_each_count_as_a_gauge():
     stats.per_system["snes"] = {"files": 2, "games": 1, "with_box_art": 1}
     stats.fetched("ok")
     stats.ratings = {"igdb": {"fetched": 0, "cached": 3, "error": 2, "no_key": 0}}
+    stats.manuals = {"ok": 4, "deferred": 9}
     run = Run()
     publish(run, stats)
     assert ("games_catalog_games", 1, {"system": "snes"}) in run.gauges
     assert ("games_art_fetches", 1, {"result": "ok"}) in run.gauges
     assert ("games_ratings_fetches", 2, {"source": "igdb", "result": "error"}) in run.gauges
     assert ("games_ratings_fetches", 0, {"source": "igdb", "result": "fetched"}) in run.gauges
+    assert ("games_manual_fetches", 9, {"result": "deferred"}) in run.gauges
 
 
 def get(url, headers=None, method="GET"):

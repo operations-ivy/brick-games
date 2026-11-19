@@ -48,8 +48,15 @@ devices play each system (brick-k8s-config#108).
   `docs/retroid.md`) and taken from brick-retro's cores for brick9000. The
   RG476H entries are expected values until it arrives. Edit the YAML and the
   next scan picks it up.
-- **Manuals**: a search link to the Internet Archive for now. Hosted manuals
-  are a follow-up.
+- **Manuals** (brick-games#1) come from the Internet Archive's per-system
+  manual sets (`manuals` in `systems.yaml`, one PDF per game, named like the
+  ROMs; Neo Geo by short name), matched by exact name, as `manuals.py`
+  describes. Each is fetched once into the data volume and opens from the
+  game's details ("Manual (PDF)"); a game without one keeps the Archive search
+  link. A scan downloads for at most an hour, so the first fill (about 1,400
+  manuals, 5 GB, as of 2026-11-18) takes a night or two. No sets for DS (its
+  names run together), Game Gear, PC Engine CD or arcade. Failures never fail
+  the scan; they're pushed as `games_manual_fetches{result}`.
 
 A scan that can't reach libretro still lists every game, without art. The
 catalog is written whole and then renamed into place.
@@ -103,9 +110,10 @@ release bumps `version` in `pyproject.toml` and `newTag` in
 - **Scan:** `brick-games-scan` CronJob, 03:30 every night, at most 4 hours, on
   brick2000 (`chuck.io/storage-node`), with the ROMs as a read-only hostPath.
   It pushes `games_catalog_*` (`with_rating` among them),
-  `games_art_fetches` and `games_ratings_fetches` (`source`: igdb, rawg;
-  `result`: fetched, cached, error, no_key; counts of systems) to the
-  Pushgateway.
+  `games_art_fetches`, `games_ratings_fetches` (`source`: igdb, rawg;
+  `result`: fetched, cached, error, no_key; counts of systems) and
+  `games_manual_fetches` (`result`: ok, cached, deferred, skipped, error,
+  none; counts of games) to the Pushgateway.
 - **Web:** `brick-games-web`, one replica on brick2000, with the data volume
   read-only.
 - **Network:** default-deny. The scan reaches only DNS, traces, the
