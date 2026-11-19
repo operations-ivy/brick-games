@@ -27,7 +27,7 @@ import io
 import json
 import re
 import time
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import NamedTuple
 
 import brick_observe
@@ -103,7 +103,7 @@ def source_name(path: Path, system: dict) -> str:
     """The name a file's game goes by: the file's, or for a dump named only
     by its disc (DISC_FILE) inside a folder of its own, the folder's, with
     the file's extension so it reads like a file name (brick-games#16)."""
-    folders = {f.rstrip("/").rsplit("/", 1)[-1].lower() for f in system["folders"]}
+    folders = {PurePath(f).name.lower() for f in system["folders"]}
     parent = path.parent.name
     if DISC_FILE.fullmatch(path.stem) and parent.lower() not in folders:
         return parent + path.suffix
