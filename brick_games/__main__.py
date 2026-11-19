@@ -29,6 +29,8 @@ def publish(run, stats) -> None:
                       value, {"source": source, "result": result})
     for result, value in stats.manuals.items():
         run.gauge("games_manual_fetches", "Games' manuals in the run, by result", value, {"result": result})
+    for result, value in stats.guides.items():
+        run.gauge("games_guide_fetches", "Systems' guide lists in the run, by result", value, {"result": result})
 
 
 def main(argv: list[str] | None = None) -> None:

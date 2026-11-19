@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from brick_games import catalog, manuals, ratings, sources, web
+from brick_games import catalog, guides, manuals, ratings, sources, web
 
 
 def png(w: int = 600, h: int = 800) -> bytes:
@@ -127,6 +127,12 @@ def offline(monkeypatch):
     monkeypatch.setattr(manuals, "item_index", lambda item: (
         {ratings.key("Final Fight (USA).pdf"): [manuals.Entry(item, "Final Fight (USA).pdf")]} if item == "SNESManuals" else {}))
     monkeypatch.setattr(manuals, "get", lambda url: io.BytesIO(b"%PDF-1.4 a manual"))
+    final_fight = {"item": {"value": "http://www.wikidata.org/entity/Q1"}, "gf": {"value": "588397"},
+                   "sw": {"value": "Final_Fight"}, "name": {"value": "Final Fight"}}
+    monkeypatch.setattr(guides, "PAUSE", 0)
+    # SNES's tagged query finds Final Fight; every other query, nothing
+    monkeypatch.setattr(guides, "sparql", lambda q: [final_fight] if "wd:Q183259" in q and "pq:P400 ?plat" in q
+                        and "FILTER NOT EXISTS" not in q else [])
 
 
 def test_scan_groups_games_fetches_art_and_writes_the_catalog(tmp_path, offline):
@@ -142,6 +148,8 @@ def test_scan_groups_games_fetches_art_and_writes_the_catalog(tmp_path, offline)
     manual = ff["manual"].partition("?v=")[0]
     assert manual.startswith("snes/manuals/") and (data / "media" / manual).read_bytes().startswith(b"%PDF")
     assert by_title["Shenmue"]["metascore"] == 88
+    assert ff["guides"] == {"gamefaqs": "588397", "strategywiki": "Final_Fight"}
+    assert "guides" not in by_title["Shenmue"]  # no match: the page links a GameFAQs search
     box, _, version = ff["art"]["box"].partition("?v=")
     assert box.endswith(".avif") and (data / "media" / box).exists()
     with Image.open(data / "media" / box) as im:
@@ -155,7 +163,7 @@ def test_scan_groups_games_fetches_art_and_writes_the_catalog(tmp_path, offline)
     assert sorted(Path(f).name for f in sf2["files"]) == ["sf2.zip", "sf2ua.zip"]
     assert "neogeo" not in json.dumps(cat["games"])
     assert stats.per_system["snes"] == {"files": 2, "games": 1, "with_box_art": 1, "with_rating": 1,
-                                        "with_manual": 1}
+                                        "with_manual": 1, "with_guide": 1}
     assert json.loads((data / "catalog.json").read_text())["games"] == cat["games"]
     # a second scan downloads nothing again
     before = dict(stats.fetches)
@@ -165,6 +173,7 @@ def test_scan_groups_games_fetches_art_and_writes_the_catalog(tmp_path, offline)
     assert (data / "catalog.json").stat().st_mtime_ns == written
     assert stats.fetches == before
     assert stats.manuals["ok"] == 0 and stats.manuals["cached"] == 1  # kept, not downloaded again
+    assert stats.guides == {"fetched": 0, "cached": 2, "error": 0}  # snes and dreamcast, from DATA/guides
     assert {g["title"]: g["art"] for g in again["games"]}["Final Fight"] == ff["art"]
 
 
@@ -178,6 +187,7 @@ def test_scan_without_network_still_lists_games(tmp_path, monkeypatch):
     monkeypatch.setattr(sources, "get", down)
     monkeypatch.setattr(ratings, "request", down)
     monkeypatch.setattr(manuals, "get", down)
+    monkeypatch.setattr(guides, "sparql", down)
     keys = {"IGDB_CLIENT_ID": "i", "IGDB_CLIENT_SECRET": "s", "RAWG_KEY": "k"}  # keys set, network down
     stats = catalog.Stats()
     cat = catalog.scan(roms, data, stats, rater=ratings.Ratings(data, keys))
@@ -186,6 +196,7 @@ def test_scan_without_network_still_lists_games(tmp_path, monkeypatch):
     assert (data / "catalog.json").exists()  # ratings down doesn't fail the scan
     # one per system with games (RAWG has only the Dreamcast of the two)
     assert (stats.ratings["igdb"]["error"], stats.ratings["rawg"]["error"]) == (2, 1)
+    assert stats.guides["error"] == 2 and not any("guides" in g for g in cat["games"])  # both systems, no links
 
 
 @pytest.fixture
