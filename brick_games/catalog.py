@@ -94,6 +94,22 @@ def disc_of(name: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
+# A dump named by its disc's ID (SX4E01.wbfs, as USB loaders keep Wii games)
+# or Nintendont's game.iso / disc2.iso: the game's name is its folder's.
+DISC_FILE = re.compile(r"[A-Z0-9]{6}|game|disc2")
+
+
+def source_name(path: Path, system: dict) -> str:
+    """The name a file's game goes by: the file's, or for a dump named only
+    by its disc (DISC_FILE) inside a folder of its own, the folder's, with
+    the file's extension so it reads like a file name (brick-games#16)."""
+    folders = {f.rstrip("/").rsplit("/", 1)[-1].lower() for f in system["folders"]}
+    parent = path.parent.name
+    if DISC_FILE.fullmatch(path.stem) and parent.lower() not in folders:
+        return parent + path.suffix
+    return path.name
+
+
 def find_files(root: Path, system: dict) -> list[Path]:
     exts = {e.lower() for e in system["exts"]}
     out = []
@@ -116,7 +132,8 @@ def group(files: list[Path], system: dict, titles: dict[str, str], parents: dict
             key = parents.get(short, short)
             name = titles.get(key, titles[short])
         else:
-            key, name = sources.norm(path.name), path.name
+            name = source_name(path, system)
+            key = sources.norm(name)
         if not key:
             continue
         game = games.setdefault(key, {"key": key, "names": [], "files": []})

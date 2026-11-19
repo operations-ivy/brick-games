@@ -42,6 +42,29 @@ def test_best_prefers_usa_then_world_then_europe():
     assert sources.best(["G (Japan).png", "G (World).png"]) == "G (World).png"
 
 
+WII = {"id": "wii", "folders": ["Wii"], "exts": ["wbfs", "iso"]}
+
+
+@pytest.mark.parametrize("rel,name", [
+    pytest.param("Wii/Xenoblade Chronicles/SX4E01.wbfs", "Xenoblade Chronicles.wbfs", id="disc-id-in-a-folder"),
+    pytest.param("Wii/Xenoblade Chronicles [SX4E01]/SX4E01.wbfs", "Xenoblade Chronicles [SX4E01].wbfs",
+                 id="folder-with-the-id"),
+    pytest.param("Wii/Super Mario Galaxy 2 v1.01/game.iso", "Super Mario Galaxy 2 v1.01.iso", id="nintendont"),
+    pytest.param("Wii/SX4E01.wbfs", "SX4E01.wbfs", id="no-folder-of-its-own"),
+    pytest.param("Wii/Xenoblade Chronicles (USA)/Xenoblade Chronicles (USA).wbfs",
+                 "Xenoblade Chronicles (USA).wbfs", id="named-file"),
+])
+def test_source_name(rel, name):
+    assert catalog.source_name(Path("/roms") / rel, WII) == name
+
+
+def test_disc_id_dumps_are_named_by_their_folder():
+    files = [Path("/roms/Wii/Xenoblade Chronicles [SX4E01]/SX4E01.wbfs"),
+             Path("/roms/Wii/Super Mario Galaxy 2 v1.01/game.iso")]
+    assert [g["title"] for g in catalog.group(files, WII, {}, {})] == ["Super Mario Galaxy 2 v1.01",
+                                                                     "Xenoblade Chronicles"]
+
+
 def test_clean_title():
     assert catalog.clean_title("Legend of Zelda, The - Majora's Mask (USA).n64") == "The Legend of Zelda - Majora's Mask"
     assert catalog.clean_title("Super Mario Land (W) (V1.1) [!].gb") == "Super Mario Land"
