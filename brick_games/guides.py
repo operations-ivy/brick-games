@@ -18,18 +18,24 @@ GameFAQs search link from the page instead.
   starts with it and doesn't go on with a number.
 - Each system's list is kept in DATA/guides/<system>.json and asked for
   again after a week. Like ratings, guides never fail the scan: anything that
-  goes wrong is a warning, the last list is kept, Wikidata isn't asked again
-  that run, and it's counted in `results`, pushed as games_guide_fetches.
+  goes wrong is a warning, the last list is kept, and it's counted in
+  `results`, pushed as games_guide_fetches.
+- The query service is shared, rate-limited and uneven: the same query took
+  1 s, 39 s and over 120 s (2026-11-19), and quick queries in a row got 429.
+  So queries are PAUSE apart, one that times out or gets 429 is tried again
+  (after Retry-After), and Wikidata counts as down for the run only after
+  GIVE_UP systems in a row fail, not after one heavy query.
 """
 
 from __future__ import annotations
 
 import json
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, NotRequired, TypedDict
 
 import brick_observe
 
@@ -40,8 +46,11 @@ SPARQL = "https://query.wikidata.org/sparql"
 # Wikimedia asks automated clients to say what they are and where they live.
 USER_AGENT = "brick-games (https://github.com/operations-ivy/brick-games)"
 MAX_AGE = 7 * 24 * 3600
-TIMEOUT = 120
-PAUSE = 1.0  # between queries: the query service is shared
+TIMEOUT = 90  # the service stops a query at 60 s itself
+PAUSE = 5.0  # between queries: the query service is shared
+RETRIES = 2  # more tries for a query that timed out or got 429
+MAX_WAIT = 120  # the longest Retry-After waited for
+GIVE_UP = 3  # systems failing in a row: Wikidata is down, not asked again this run
 # What happened to each system's list in one scan (as in ratings.RESULTS):
 #   fetched  asked Wikidata and got it
 #   cached   the kept list was fresh enough
@@ -59,6 +68,16 @@ TAGGED = """SELECT ?item ?gf ?sw ?name WHERE {
   VALUES ?plat { %s }
   ?item p:P4769 ?st. ?st ps:P4769 ?gf; pq:P400 ?plat.%s
 }"""
+
+
+class Record(TypedDict):
+    """One game's links, as kept in DATA/guides."""
+
+    names: list[str]
+    gamefaqs: str
+    strategywiki: NotRequired[str]
+
+
 UNTAGGED = """SELECT ?item ?gf ?sw ?name WHERE {
   VALUES ?plat { %s }
   ?item wdt:P400 ?plat; p:P4769 ?st. ?st ps:P4769 ?gf.
@@ -72,7 +91,7 @@ def queries(platforms: list[str]) -> tuple[str, str]:
     return TAGGED % (plats, _NAMES), UNTAGGED % (plats, _NAMES)
 
 
-def records(tagged: list[dict], untagged: list[dict]) -> list[dict]:
+def records(tagged: list[dict], untagged: list[dict]) -> list[Record]:
     """SPARQL rows -> one record per game: {names, gamefaqs, strategywiki?}.
     A game with several ids takes a platform-tagged one, the lowest first."""
     games: dict[str, dict[str, Any]] = {}
@@ -90,14 +109,14 @@ def records(tagged: list[dict], untagged: list[dict]) -> list[dict]:
     out = []
     for item in sorted(games):
         g = games[item]
-        record = {"names": sorted(g["names"]), "gamefaqs": str(min(g["ids"])[1])}
+        record: Record = {"names": sorted(g["names"]), "gamefaqs": str(min(g["ids"])[1])}
         if "strategywiki" in g:
             record["strategywiki"] = g["strategywiki"]
         out.append(record)
     return out
 
 
-def build_index(recs: list[dict]) -> dict[str, dict]:
+def build_index(recs: list[Record]) -> dict[str, dict]:
     """key(name) -> {gamefaqs, strategywiki?}. Two games with one name on a
     platform: the first (lowest item id) keeps it."""
     index: dict[str, dict] = {}
@@ -109,7 +128,8 @@ def build_index(recs: list[dict]) -> dict[str, dict]:
     return index
 
 
-def sparql(query: str) -> list[dict]:
+def ask(query: str) -> list[dict]:
+    """One query's result rows (SPARQL JSON bindings)."""
     url = f"{SPARQL}?{urllib.parse.urlencode({'query': query})}"
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT,
                                                "Accept": "application/sparql-results+json"})
@@ -117,21 +137,49 @@ def sparql(query: str) -> list[dict]:
         return json.loads(response.read())["results"]["bindings"]
 
 
+def retry_after(e: urllib.error.HTTPError) -> float:
+    """How long a 429 asks us to wait (seconds; a date or nothing: PAUSE)."""
+    value = e.headers.get("Retry-After", "") if e.headers else ""
+    return min(float(value), MAX_WAIT) if value.isdigit() else PAUSE
+
+
+def timed_out(e: Exception) -> bool:
+    """A read timeout (TimeoutError) or a connect one (URLError wrapping it)."""
+    return isinstance(e, TimeoutError) or isinstance(getattr(e, "reason", None), TimeoutError)
+
+
+def sparql(query: str) -> list[dict]:
+    """ask(), tried again after a timeout or a 429 (module docstring)."""
+    for _ in range(RETRIES):
+        try:
+            return ask(query)
+        except urllib.error.HTTPError as e:
+            if e.code != 429:
+                raise
+            time.sleep(retry_after(e))
+        except (TimeoutError, urllib.error.URLError) as e:
+            if not timed_out(e):
+                raise
+            time.sleep(PAUSE)
+    return ask(query)  # the last try: its failure is the caller's
+
+
 class Guides:
     """Each system's guide links, from the cache in DATA/guides or Wikidata."""
 
     def __init__(self, data: Path) -> None:
         self.cache_dir = data / "guides"
-        self.down = False  # Wikidata failed this run: not asked again
+        self.failed_in_a_row = 0  # GIVE_UP of these: Wikidata isn't asked again this run
         self.results = dict.fromkeys(RESULTS, 0)
 
-    def fetch(self, platforms: list[str]) -> list[dict]:
+    def fetch(self, platforms: list[str]) -> list[Record]:
         tagged, untagged = queries(platforms)
+        time.sleep(PAUSE)
         rows = sparql(tagged)
         time.sleep(PAUSE)
         return records(rows, sparql(untagged))
 
-    def cached(self, system: dict) -> list[dict]:
+    def cached(self, system: dict) -> list[Record]:
         """The system's records: the cache while it's fresh and for the same
         platforms, else fetched (and kept); the old cache if that fails.
         Never raises."""
@@ -149,17 +197,18 @@ class Guides:
         if old and old.get("platforms") == platforms and time.time() - old.get("fetched", 0) < MAX_AGE:
             self.results["cached"] += 1
             return last
-        if self.down:
+        if self.failed_in_a_row >= GIVE_UP:
             self.results["error"] += 1
             return last
         try:
             recs = self.fetch(platforms)
         except Exception as e:  # anything at all: the scan goes on (module docstring)
-            self.down = True
+            self.failed_in_a_row += 1
             self.results["error"] += 1
-            log.warning("guides: Wikidata failed; keeping the last list and not asking again this run",
-                        system=system["id"], error=f"{type(e).__name__}: {e}")
+            log.warning("guides: Wikidata failed; keeping the last list", system=system["id"],
+                        error=f"{type(e).__name__}: {e}", given_up=self.failed_in_a_row >= GIVE_UP)
             return last
+        self.failed_in_a_row = 0
         self.results["fetched"] += 1
         log.info("guides fetched", system=system["id"], games=len(recs))
         try:

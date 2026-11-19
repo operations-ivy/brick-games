@@ -196,7 +196,7 @@ def test_scan_without_network_still_lists_games(tmp_path, monkeypatch):
     assert (data / "catalog.json").exists()  # ratings down doesn't fail the scan
     # one per system with games (RAWG has only the Dreamcast of the two)
     assert (stats.ratings["igdb"]["error"], stats.ratings["rawg"]["error"]) == (2, 1)
-    assert stats.guides["error"] == 2 and not any("guides" in g for g in cat["games"])  # asked once, then not again
+    assert stats.guides["error"] == 2 and not any("guides" in g for g in cat["games"])  # both systems, no links
 
 
 @pytest.fixture

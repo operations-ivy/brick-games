@@ -1,5 +1,7 @@
+import email.message
 import json
 import time
+import urllib.error
 
 import pytest
 
@@ -93,7 +95,7 @@ def test_a_corrupt_cache_is_asked_again(tmp_path, wikidata, content):
     assert wikidata == ["tagged", "untagged"]
 
 
-def test_a_failure_keeps_the_last_list_is_counted_and_asked_once(tmp_path, monkeypatch):
+def test_a_failure_keeps_the_last_list_and_gives_up_after_systems_in_a_row(tmp_path, monkeypatch):
     path = tmp_path / "guides" / "psx.json"
     path.parent.mkdir()
     path.write_text(json.dumps({"fetched": 0, "platforms": ["Q10677"],
@@ -102,13 +104,95 @@ def test_a_failure_keeps_the_last_list_is_counted_and_asked_once(tmp_path, monke
 
     def down(query):
         calls.append(query)
-        raise OSError("timed out")
+        raise OSError("connection refused")
 
     monkeypatch.setattr(guides, "sparql", down)
+    monkeypatch.setattr(guides, "PAUSE", 0)
     g = guides.Guides(tmp_path)
     assert ratings.match(g.for_system(PSX), "Final Fantasy VII") == {"gamefaqs": "197341"}  # the last list
-    assert g.for_system({"id": "ps2", "wikidata": ["Q10680"]}) == {}  # not asked again this run
-    assert len(calls) == 1 and g.results == {"fetched": 0, "cached": 0, "error": 2}
+    for n in range(guides.GIVE_UP - 1):  # one heavy query isn't Wikidata down: the next system is asked
+        assert g.for_system({"id": f"s{n}", "wikidata": ["Q1"]}) == {}
+    assert len(calls) == guides.GIVE_UP
+    assert g.for_system({"id": "ps2", "wikidata": ["Q10680"]}) == {}  # given up: not asked
+    assert len(calls) == guides.GIVE_UP and g.results == {"fetched": 0, "cached": 0, "error": guides.GIVE_UP + 1}
+
+
+def test_a_success_resets_the_count_toward_giving_up(tmp_path, monkeypatch):
+    answers = iter([OSError("slow")] * (guides.GIVE_UP - 1) + [[]] * 2 + [OSError("slow")] * (guides.GIVE_UP - 1))
+
+    def flaky(query):
+        a = next(answers)
+        if isinstance(a, Exception):
+            raise a
+        return a
+
+    monkeypatch.setattr(guides, "sparql", flaky)
+    monkeypatch.setattr(guides, "PAUSE", 0)
+    g = guides.Guides(tmp_path)
+    for n in range(2 * guides.GIVE_UP - 1):
+        g.for_system({"id": f"s{n}", "wikidata": ["Q1"]})
+    assert g.results == {"fetched": 1, "cached": 0, "error": 2 * guides.GIVE_UP - 2}  # every one asked
+
+
+def http_error(code, retry_after=None):
+    headers = email.message.Message()
+    if retry_after is not None:
+        headers["Retry-After"] = retry_after
+    return urllib.error.HTTPError("https://query.wikidata.org/sparql", code, "x", headers, None)
+
+
+@pytest.mark.parametrize("failure,wait", [
+    pytest.param(http_error(429, "7"), 7, id="429-retry-after"),
+    pytest.param(http_error(429, "99999"), guides.MAX_WAIT, id="429-capped"),
+    pytest.param(http_error(429), "pause", id="429-no-header"),
+    pytest.param(TimeoutError("The read operation timed out"), "pause", id="read-timeout"),
+    pytest.param(urllib.error.URLError(TimeoutError("timed out")), "pause", id="connect-timeout"),
+])
+def test_sparql_tries_again_after_a_timeout_or_429(monkeypatch, failure, wait):
+    tries, slept = [], []
+
+    def ask(query):
+        tries.append(query)
+        if len(tries) == 1:
+            raise failure
+        return [{"ok": True}]
+
+    monkeypatch.setattr(guides, "ask", ask)
+    monkeypatch.setattr(guides.time, "sleep", slept.append)
+    want = guides.PAUSE if wait == "pause" else wait  # PAUSE as patched for the test (conftest)
+    assert guides.sparql("q") == [{"ok": True}] and len(tries) == 2 and slept == [want]
+
+
+@pytest.mark.parametrize("failure", [
+    pytest.param(http_error(500), id="server-error"),
+    pytest.param(urllib.error.URLError("connection refused"), id="refused"),
+])
+def test_sparql_raises_other_failures_at_once(monkeypatch, failure):
+    tries = []
+
+    def ask(query):
+        tries.append(query)
+        raise failure
+
+    monkeypatch.setattr(guides, "ask", ask)
+    monkeypatch.setattr(guides.time, "sleep", lambda s: None)
+    with pytest.raises(type(failure)):
+        guides.sparql("q")
+    assert len(tries) == 1
+
+
+def test_sparql_gives_up_after_its_retries(monkeypatch):
+    tries = []
+
+    def ask(query):
+        tries.append(query)
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(guides, "ask", ask)
+    monkeypatch.setattr(guides.time, "sleep", lambda s: None)
+    with pytest.raises(TimeoutError):
+        guides.sparql("q")
+    assert len(tries) == guides.RETRIES + 1
 
 
 def test_an_unexpected_answer_does_not_raise(tmp_path, monkeypatch):
@@ -119,7 +203,8 @@ def test_an_unexpected_answer_does_not_raise(tmp_path, monkeypatch):
 
 def test_a_cache_that_cannot_be_written_still_gives_the_list(tmp_path, wikidata):
     (tmp_path / "guides").write_text("a file where the directory goes")
-    assert guides.Guides(tmp_path).for_system(PSX)
+    index = guides.Guides(tmp_path).for_system(PSX)
+    assert ratings.match(index, "Final Fantasy VII") == {"gamefaqs": "197341", "strategywiki": "Final_Fantasy_VII"}
 
 
 def test_a_system_without_platforms_asks_nothing(tmp_path, wikidata):
