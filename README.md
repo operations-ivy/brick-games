@@ -59,6 +59,17 @@ devices play each system (brick-k8s-config#108).
   manuals, 5 GB, as of 2026-11-18) takes a night or two. No sets for DS (its
   names run together), Game Gear, PC Engine CD or arcade. Failures never fail
   the scan; they're pushed as `games_manual_fetches{result}`.
+- **Guides** (the user, 2026-11-19): for PS1, PS2, NES, SNES, GBA, Game Boy,
+  Dreamcast, GameCube, Genesis, Sega CD, 32X, Saturn, Game Gear and DOS,
+  each game's details link its GameFAQs page (the Guides tab lists them) and
+  its StrategyWiki walkthrough when there is one. GameFAQs refuses scripted
+  requests (Cloudflare), so its guides aren't read: Wikidata gives each
+  game's GameFAQs id (P4769) and StrategyWiki page (P9075), by the system's
+  platform items (`wikidata` in `systems.yaml`), matched by name like
+  ratings (`guides.py`). A game Wikidata doesn't know gets a GameFAQs search
+  link. Kept in `DATA/guides` and asked again weekly; failures never fail the
+  scan (`games_guide_fetches{result}`).
+- **The game details** close with CLOSE, Escape, or a click outside them.
 
 A scan that can't reach libretro still lists every game, without art. The
 catalog is written whole and then renamed into place.
@@ -123,6 +134,9 @@ release bumps `version` in `pyproject.toml` and `newTag` in
   is reachable only from Traefik and Prometheus.
 
 ## DOS games
+
+The 250 DOS games are in the catalog as their own system (`dos`, folder
+`/extra/games/roms/dos`, since 0.6.0), playing on brick9000 and the RG476H.
 
 brick9000 and the RG476H play DOS games with DOSBox Pure, one zip per game,
 and neither has a keyboard. `brick_games/dos.py` makes each zip start its game

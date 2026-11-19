@@ -81,6 +81,7 @@
   a { color: var(--cyan); }
   .close { position: absolute; top: 10px; right: 10px; }
   h3 { font: 700 12px var(--pixel); letter-spacing: 1px; color: var(--slate); margin: 10px 0 4px; }
+  .links { display: flex; flex-wrap: wrap; gap: 6px 16px; }
 </style>
 </head>
 <body>
@@ -262,6 +263,13 @@ function open(id) {
     ? `<a href="/media/${esc(g.manual)}" target="_blank" rel="noopener">Manual (PDF) ↗</a>`
     : `<a href="https://archive.org/search?query=${encodeURIComponent(`${g.title} ${s.name} manual`)}"
          target="_blank" rel="noopener">Find the manual ↗</a>`;
+  // Guides (guides.py): GameFAQs' page for the game (its Guides tab) when Wikidata knows it, else a
+  // GameFAQs search; StrategyWiki's walkthrough when there is one. Only for the systems with guides.
+  const gf = g.guides?.gamefaqs, sw = g.guides?.strategywiki;
+  const guides = s.guides ? `<h3>Guides</h3><div class="links">${gf
+      ? `<a href="https://gamefaqs.gamespot.com/-/${encodeURIComponent(gf)}-" target="_blank" rel="noopener">Guides on GameFAQs ↗</a>`
+      : `<a href="https://gamefaqs.gamespot.com/search?game=${encodeURIComponent(g.title)}" target="_blank" rel="noopener">Find guides on GameFAQs ↗</a>`}${sw
+      ? `<a href="https://strategywiki.org/wiki/${encodeURI(sw)}" target="_blank" rel="noopener">StrategyWiki walkthrough ↗</a>` : ""}</div>` : "";
   const shots = ["title", "snap"].filter((k) => g.art[k]).map((k) => `<img src="/media/${esc(g.art[k])}" alt="${k}">`).join("");
   $("dlg").innerHTML = `<button class="close" id="x">CLOSE</button><div class="dlg">
     <div class="box">${g.art.box ? `<img src="/media/${esc(g.art.box)}" alt="box art">` : ""}<div class="shots">${shots}</div></div>
@@ -269,10 +277,21 @@ function open(id) {
       <dl>${facts}${scores}</dl>
       <h3>Plays on</h3><div class="plays">${plays}</div>
       ${manual}
+      ${guides}
       <h3>Files</h3><div class="files">${g.files.map(esc).join("\n")}</div></div></div>`;
   $("x").onclick = () => $("dlg").close();
   $("dlg").showModal();
 }
+
+// A click outside the box closes it: the backdrop's clicks land on the dialog itself. Only when the
+// press began outside too, so selecting text in it and letting go past its edge doesn't close it.
+function outside(e) {
+  const r = $("dlg").getBoundingClientRect();
+  return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
+}
+let pressedOutside = false;
+$("dlg").addEventListener("pointerdown", (e) => { pressedOutside = outside(e); });
+$("dlg").addEventListener("click", (e) => { if (pressedOutside && outside(e)) $("dlg").close(); });
 
 function readHash() {
   const p = new URLSearchParams(location.hash.slice(1));

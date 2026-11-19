@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "brick-games"
-version = "0.5.1"
+version = "0.6.0"
 description = "The catalog of every game ROM in the brick homelab, the devices it plays on, and its box art, at games.brick.nozdormu.cloud"
 authors = ["Patrick White <whitep@alumni.vcu.edu>"]
 package-mode = false

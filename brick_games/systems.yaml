@@ -5,6 +5,8 @@
 #   igdb:     IGDB platform ids, for critic and user ratings (ratings.py)
 #   rawg:     RAWG platform ids, for the Metascore; only systems Metacritic
 #             reviewed (about 1995 on)
+#   wikidata: Wikidata platform items, for each game's GameFAQs and StrategyWiki
+#             links (guides.py)
 #   manuals:  Internet Archive items with one PDF manual per game (manuals.py);
 #             none found for DS (names run together), Game Gear, PC Engine CD
 #             or arcade
@@ -28,6 +30,7 @@ systems:
     folders: [nes]
     libretro: "Nintendo - Nintendo Entertainment System"
     igdb: [18, 99, 51]
+    wikidata: [Q172742]
     manuals: [NESManuals]
     exts: [nes, fds]
     devices: {brick9000: good, rp2plus: good, rg476h: good}
@@ -36,6 +39,7 @@ systems:
     folders: [snes]
     libretro: "Nintendo - Super Nintendo Entertainment System"
     igdb: [19, 58]
+    wikidata: [Q183259]
     manuals: [SNESManuals]
     exts: [smc, sfc]
     devices: {brick9000: good, rp2plus: good, rg476h: good}
@@ -44,6 +48,7 @@ systems:
     folders: [gb, gbc]
     libretro: "Nintendo - Game Boy"
     igdb: [33, 22]
+    wikidata: [Q186437, Q203992]
     manuals: [NintendoGameBoyManuals, NintendoGameBoyColorManuals]
     exts: [gb, gbc, zip]
     devices: {brick9000: good, rp2plus: good, rg476h: good}
@@ -52,6 +57,7 @@ systems:
     folders: [gba]
     libretro: "Nintendo - Game Boy Advance"
     igdb: [24]
+    wikidata: [Q188642]
     manuals: [NintendoGameBoyAdvanceManuals]
     rawg: [24]
     exts: [gba]
@@ -78,6 +84,7 @@ systems:
     folders: [gc]
     libretro: "Nintendo - GameCube"
     igdb: [21]
+    wikidata: [Q182172]
     manuals: [NintendoGameCubeManuals]
     rawg: [105]
     exts: [rvz, iso, gcz]
@@ -96,6 +103,7 @@ systems:
     folders: [megadrive]
     libretro: "Sega - Mega Drive - Genesis"
     igdb: [29]
+    wikidata: [Q10676]
     manuals: [SEGAGenesisMegaDriveManuals]
     exts: [bin, md, gen, smd]
     devices: {brick9000: good, rp2plus: good, rg476h: good}
@@ -104,6 +112,7 @@ systems:
     folders: [gamegear]
     libretro: "Sega - Game Gear"
     igdb: [35]
+    wikidata: [Q751719]
     exts: [gg, zip]
     devices: {brick9000: no, rp2plus: good, rg476h: good}
   - id: sega32x
@@ -111,6 +120,7 @@ systems:
     folders: [sega32x]
     libretro: "Sega - 32X"
     igdb: [30]
+    wikidata: [Q1063978]
     manuals: [SEGA32XManuals_201812]
     exts: [32x]
     devices: {brick9000: good, rp2plus: good, rg476h: good}
@@ -119,6 +129,7 @@ systems:
     folders: [segacd]
     libretro: "Sega - Mega-CD - Sega CD"
     igdb: [78]
+    wikidata: [Q1047516]
     manuals: [SEGACDManuals]
     exts: [chd, cue]
     devices: {brick9000: good, rp2plus: good, rg476h: good}
@@ -127,6 +138,7 @@ systems:
     folders: [segasaturn]
     libretro: "Sega - Saturn"
     igdb: [32]
+    wikidata: [Q200912]
     manuals: [SEGASaturnManuals_201812]
     rawg: [107]
     exts: [cue, chd]
@@ -136,6 +148,7 @@ systems:
     folders: [Dreamcast]
     libretro: "Sega - Dreamcast"
     igdb: [23]
+    wikidata: [Q184198]
     manuals: [SEGADreamcastManuals_201812]
     rawg: [106]
     exts: [chd, cdi, gdi]
@@ -160,6 +173,7 @@ systems:
     folders: [psx]
     libretro: "Sony - PlayStation"
     igdb: [7]
+    wikidata: [Q10677]
     manuals: [SonyPlaystationManuals]
     rawg: [27]
     exts: [chd, cue, pbp]
@@ -169,6 +183,7 @@ systems:
     folders: [PS2]
     libretro: "Sony - PlayStation 2"
     igdb: [8]
+    wikidata: [Q10680]
     manuals: [SonyPlaystation2Manuals_201812]
     rawg: [15]
     exts: [iso, chd]
@@ -199,3 +214,11 @@ systems:
     exts: [zip]
     arcade: true
     devices: {brick9000: good, rp2plus: good, rg476h: good}
+  - id: dos
+    name: "DOS"
+    folders: [dos]
+    libretro: "DOS"
+    igdb: [13]
+    wikidata: [Q170434, Q47604]
+    exts: [zip]
+    devices: {brick9000: good, rp2plus: no, rg476h: good}
