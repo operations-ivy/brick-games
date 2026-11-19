@@ -13,7 +13,9 @@ devices play each system (brick-k8s-config#108).
   with the system's extensions and makes one entry per game: regions,
   revisions and formats of the same title fold together, discs are counted,
   and arcade clones go under their parent set (FinalBurn Neo's dat). BIOS
-  sets aren't games and are left out.
+  sets aren't games and are left out. A dump named only by its disc
+  (`Wii/Xenoblade Chronicles/SX4E01.wbfs`, Nintendont's `game.iso`) goes by
+  its folder's name.
 - **Art** comes from libretro's thumbnails (box art, title screen,
   screenshot), matched by a normalized title, as `sources.norm` and `loose`
   describe. Each picture is fetched once, shrunk to 400 px and kept in the
