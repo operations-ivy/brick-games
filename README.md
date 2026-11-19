@@ -68,7 +68,10 @@ devices play each system (brick-k8s-config#108).
   platform items (`wikidata` in `systems.yaml`), matched by name like
   ratings (`guides.py`). A game Wikidata doesn't know gets a GameFAQs search
   link. Kept in `DATA/guides` and asked again weekly; failures never fail the
-  scan (`games_guide_fetches{result}`).
+  scan (`games_guide_fetches{result}`). Measured 2026-11-19: 1,831 of 2,805
+  games get their GameFAQs page (GameCube 80 of 85, PlayStation 62 of 70,
+  NES 577 of 701); Wikidata knows few DOS, 32X and Sega CD games, so most of
+  those get the search link.
 - **The game details** close with CLOSE, Escape, or a click outside them.
 
 A scan that can't reach libretro still lists every game, without art. The

@@ -219,6 +219,6 @@ systems:
     folders: [dos]
     libretro: "DOS"
     igdb: [13]
-    wikidata: [Q170434, Q47604]
+    wikidata: [Q170434, Q47604, Q751046]
     exts: [zip]
     devices: {brick9000: good, rp2plus: no, rg476h: good}
