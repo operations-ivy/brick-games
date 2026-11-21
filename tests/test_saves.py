@@ -202,18 +202,36 @@ def test_bad_uploads_are_refused(service, query, body, status):
     assert e.value.code == status
 
 
-def test_a_core_folder_settles_a_shared_name_and_a_new_save_never_lands_on_a_file(tmp_path):
+@pytest.mark.parametrize("write,folders", [
+    ({"gba": "mGBA/{stem}.srm", "snes": "Snes9x/{stem}.srm"}, {"mGBA": "gba", "Snes9x": "snes"}),
+    ({"megadrive": "Genesis Plus GX/{stem}.srm", "segacd": "Genesis Plus GX/{stem}.srm"}, {}),  # two systems
+    ("{stem}.srm", {}),  # one name for every system: no folders
+])
+def test_core_folders(write, folders):
+    assert saves_agent.core_folders({"write": write}) == folders
+
+
+def test_a_core_folder_settles_a_name_three_games_share(tmp_path):
     fs = saves_agent.Local()
     root = {"path": str(tmp_path / "saves"), "recursive": True, "kind": "sram",
-            "write": {"gba": "mGBA/{stem}.srm", "snes": "Snes9x/{stem}.srm", "megadrive": "Genesis Plus GX/{stem}.srm",
-                      "segacd": "Genesis Plus GX/{stem}.srm"}}
-    assert saves_agent.core_folders(root) == {"mGBA": "gba", "Snes9x": "snes"}  # Genesis Plus GX is two systems
+            "write": {"gba": "mGBA/{stem}.srm", "arcade": "FinalBurn Neo/{stem}.srm"}}
     cat = {"games": [{"id": "g" * 16, "system": "gba", "title": "TMNT", "files": ["gba/TMNT (USA).gba"]},
                      {"id": "a" * 16, "system": "arcade", "title": "Teenage Mutant Ninja Turtles", "files": ["fba/tmnt.zip"]}],
            "systems": [{"id": "gba", "exts": ["gba"]}, {"id": "arcade", "exts": ["zip"]}]}
-    games = saves_agent.Games(cat)
     put(tmp_path / "saves" / "mGBA" / "TMNT (USA).srm", b"gba save")
-    both = {"g" * 16: "TMNT (USA)", "a" * 16: "tmnt"}  # both ROMs on the device
-    found = saves_agent.find_saves(fs, {"roots": [root]}, games, both)
-    assert list(found) == ["g" * 16]  # in mGBA/: the GBA game
-    assert fs.exists(str(tmp_path / "saves" / "mGBA" / "TMNT (USA).srm"))
+    both = {"g" * 16: "TMNT (USA)", "a" * 16: "tmnt"}  # both ROMs on the device: the names alone can't tell
+    assert list(saves_agent.find_saves(fs, {"roots": [root]}, saves_agent.Games(cat), both)) == ["g" * 16]
+
+
+def test_a_new_save_is_never_written_over_a_file(service, monkeypatch):
+    base, tmp, _ = service
+    put(tmp / "b9k-roms" / "snes" / "Super Metroid (JU) [!].smc", b"rom")
+    put(tmp / "rp" / "Super Metroid (USA).srm", b"retroid save")
+    run(base, "rp2plus", tmp)  # current: the Retroid's
+    mine = put(tmp / "b9k" / "Super Metroid (JU) [!].srm", b"brick9000 save, not matched")
+    monkeypatch.setattr(saves_agent, "find_saves", lambda *a, **k: {})  # as if the agent couldn't tell whose it is
+    said = []
+    saves_agent.sync(saves_agent.Server(base), saves_agent.Local(), "brick9000", tmp / "state" / "brick9000.json",
+                     say=said.append)
+    assert mine.read_bytes() == b"brick9000 save, not matched"
+    assert any(line.startswith("skip    Super Metroid") for line in said)

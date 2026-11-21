@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+from collections import defaultdict
 import hashlib
 import json
 import os
@@ -214,10 +215,11 @@ def core_folders(root: dict) -> dict[str, str]:
     write = root.get("write")
     if not isinstance(write, dict):
         return {}
-    seen: dict[str, set[str]] = {}
+    seen: defaultdict[str, set[str]] = defaultdict(set)
     for system, name in write.items():
-        if "/" in name:
-            seen.setdefault(name.split("/", 1)[0], set()).add(system)
+        folder, sep, _ = name.partition("/")
+        if sep:
+            seen[folder].add(system)
     return {folder: next(iter(systems)) for folder, systems in seen.items() if len(systems) == 1}
 
 
