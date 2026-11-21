@@ -11,6 +11,14 @@ manuals. Nothing here touches the ROMs; the library on the drive is only read.
                             a game's manual, streamed: from the manual cache on
                             NVMe, or copied in from the library first (cache.py);
                             503 when it isn't cached and the drive is offline
+    GET  /api/guides?q=<title words>
+                            games with a local strategy guide (strategy.py), by title
+    GET  /api/guides/<id>   a game's guide: source, license, grade, its sections
+    GET  /api/guides/<id>/text
+                            the guide, as Markdown
+    GET  /api/guides/<id>/search?q=<words>
+                            the sections that best match, with their text
+                            (for an AI session: homelab-context's game-guide skill)
     GET  /health /ready /metrics
 
 Caching (README "Caching"): the page and the catalog carry a strong ETag (the
@@ -28,6 +36,7 @@ from __future__ import annotations
 import functools
 import gzip
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -43,12 +52,15 @@ import brick_observe
 from brick_observe import metrics as observe_metrics
 from prometheus_client import Counter
 
+from . import strategy
 from .cache import ManualCache, Offline
 
 log = brick_observe.get_logger(__name__)
 PAGE_FILE = Path(__file__).parent / "static" / "index.html"
 MEDIA_PATH = re.compile(r"^/media/(?P<rel>[a-z0-9]+/(?:Named_(?:Boxarts|Titles|Snaps)/[0-9a-f]{16}\.(?P<art>avif|png)"
                         r"|manuals/[0-9a-f]{16}\.(?P<manual>pdf)))$")
+MAX_GUIDE_HITS = 50  # games /api/guides?q= lists at most
+GUIDE_PATH = re.compile(r"^/api/guides/(?P<id>[0-9a-f]{16})(?P<what>/text|/search)?$")
 MEDIA_TYPES = {"avif": "image/avif", "png": "image/png", "pdf": "application/pdf"}
 STREAM_CHUNK = 256 * 1024  # media is sent in pieces: a manual can be tens of MB
 REQUESTS = Counter("games_web_requests_total", "Requests, by route and status", ["route", "status"])
@@ -221,6 +233,8 @@ class Handler(BaseHTTPRequestHandler):
         path, _, query = self.path.partition("?")
         if route := ROUTES.get(path):
             route(self, path)
+        elif m := GUIDE_PATH.match(path):
+            self._guide(m["id"], m["what"] or "", query_q(query))
         elif m := MEDIA_PATH.match(path):
             # parse_qs drops blank values: a bare ?v= is not a versioned URL.
             versioned = "v" in parse_qs(query)
@@ -284,6 +298,50 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._stream(f, st.st_size, content_type, "/media", cache, headers)
 
+    def _guide_files(self, game_id: str) -> tuple[Path, Path]:
+        store = self.data / "strategy"
+        return store / f"{game_id}.json", store / f"{game_id}.md"
+
+    def _guide(self, game_id: str, what: str, q: str) -> None:
+        meta_file, md_file = self._guide_files(game_id)
+        try:
+            if what == "/text":
+                st = md_file.stat()
+                self._send_entity(Entity.of(md_file.read_bytes(), st.st_mtime), "text/markdown; charset=utf-8",
+                                  "/api/guides")
+            elif what == "/search":
+                meta = json.loads(meta_file.read_text())
+                found = strategy.search(md_file.read_text(), meta["sections"], q)
+                body = json.dumps({"game": meta["game"], "grade": meta["grade"], "source": meta["source"],
+                                   "license": meta["license"], "q": q, "sections": found}, ensure_ascii=False)
+                self._send_entity(Entity.of(body.encode()), "application/json", "/api/guides")
+            else:
+                st = meta_file.stat()
+                self._send_entity(Entity.of(meta_file.read_bytes(), st.st_mtime), "application/json", "/api/guides")
+        except FileNotFoundError:
+            self._respond(404, b'{"error": "no local guide for this game"}', "application/json", "/api/guides")
+        except (ValueError, KeyError) as e:  # a guide file the scan didn't finish, or an old format
+            log.warning("guide unreadable", game=game_id, error=f"{type(e).__name__}: {e}")
+            self._respond(500, b'{"error": "this guide is unreadable"}', "application/json", "/api/guides")
+
+    def _find_guides(self, path: str) -> None:
+        """Games with a local guide whose title has every word of ?q=."""
+        _, _, query = self.path.partition("?")
+        words = query_q(query).lower().split()
+        try:
+            games = json.loads(self.catalog.get(self.data / "catalog.json").body)["games"]
+        except FileNotFoundError:
+            self._respond(503, NO_CATALOG, "application/json", path)
+            return
+        found = []
+        for g in games:
+            title = g["title"].lower()
+            if g.get("strategy") and all(w in title for w in words):
+                found.append({"id": g["id"], "title": g["title"], "system": g["system"], **g["strategy"]})
+                if len(found) == MAX_GUIDE_HITS:
+                    break
+        self._send_entity(Entity.of(json.dumps(found, ensure_ascii=False).encode()), "application/json", path)
+
     def _health(self, path: str) -> None:
         ok = path == "/health" or (self.data / "catalog.json").exists()
         self._respond(200 if ok else 503, b"ok" if ok else b"no catalog yet", "text/plain", path)
@@ -293,8 +351,13 @@ class Handler(BaseHTTPRequestHandler):
         self._respond(200, body, kind, path)
 
 
-ROUTES = {"/": Handler._page, "/api/catalog": Handler._catalog, "/health": Handler._health,
-          "/ready": Handler._health, "/metrics": Handler._metrics}
+ROUTES = {"/": Handler._page, "/api/catalog": Handler._catalog, "/api/guides": Handler._find_guides,
+          "/health": Handler._health, "/ready": Handler._health, "/metrics": Handler._metrics}
+
+
+def query_q(query: str) -> str:
+    """A query string's ?q= (blank when it has none)."""
+    return parse_qs(query).get("q", [""])[0]
 
 
 def make_handler(data: Path, lib: Path | None = None, manual_cache: int = MANUAL_CACHE_BYTES) -> type[Handler]:

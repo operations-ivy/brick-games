@@ -82,6 +82,27 @@
   .close { position: absolute; top: 10px; right: 10px; }
   h3 { font: 700 12px var(--pixel); letter-spacing: 1px; color: var(--slate); margin: 10px 0 4px; }
   .links { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+  .lan { margin-top: 8px; }
+  .grade { font: 12px var(--mono); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--edge); margin-left: 6px; }
+  .grade.complete { color: var(--green); border-color: var(--green); }
+  .grade.partial, .grade.hand-saved { color: var(--amber); border-color: var(--amber); }
+  .grade.stub { color: var(--red); border-color: var(--red); }
+  .reader { padding: 18px; }
+  .reader .top { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 0 90px 10px 0; }
+  .reader h2 { margin: 0; font-size: 22px; }
+  .reader .warn { font: 13px var(--mono); color: var(--amber); margin: 0 0 10px; }
+  .reader .cols { display: grid; grid-template-columns: minmax(0, 240px) 1fr; gap: 14px; }
+  @media (max-width: 640px) { .reader .cols { grid-template-columns: 1fr; } .reader .toc { max-height: 160px; } }
+  .reader .toc { max-height: 65vh; overflow: auto; font: 13px var(--mono); border-right: 1px solid var(--edge); padding-right: 8px; }
+  .reader .toc a { display: block; padding: 2px 0; text-decoration: none; }
+  .reader .toc a.l3 { padding-left: 12px; color: var(--dim); }
+  .reader .body { max-height: 65vh; overflow: auto; }
+  .reader .body h3 { font-size: 14px; color: var(--magenta); margin: 16px 0 6px; }
+  .reader .body h4 { font: 700 14px var(--mono); color: var(--cyan); margin: 12px 0 4px; }
+  .reader .body p { white-space: pre-wrap; margin: 0 0 8px; line-height: 1.45; }
+  .reader input { font: 14px var(--mono); background: var(--void); color: var(--text); border: 1px solid var(--edge);
+                  border-radius: 6px; padding: 6px 8px; width: 100%; box-sizing: border-box; margin-bottom: 8px; }
+  .reader .src { font: 12px var(--mono); color: var(--dim); }
 </style>
 </head>
 <body>
@@ -270,6 +291,10 @@ function open(id) {
       ? `<a href="https://gamefaqs.gamespot.com/-/${encodeURIComponent(gf)}-" target="_blank" rel="noopener">Guides on GameFAQs ↗</a>`
       : `<a href="https://gamefaqs.gamespot.com/search?game=${encodeURIComponent(g.title)}" target="_blank" rel="noopener">Find guides on GameFAQs ↗</a>`}${sw
       ? `<a href="https://strategywiki.org/wiki/${encodeURI(sw)}" target="_blank" rel="noopener">StrategyWiki walkthrough ↗</a>` : ""}</div>` : "";
+  // A local walkthrough (strategy.py), read on the LAN; its grade is StrategyWiki's completion stage.
+  const st = g.strategy;
+  const local = st ? `<div class="lan"><button id="read">READ THE GUIDE</button><span class="grade ${esc(st.grade)}">${esc(st.grade)}</span>
+      <span class="sub">${plural(st.sections, "section")}</span></div>` : "";
   const shots = ["title", "snap"].filter((k) => g.art[k]).map((k) => `<img src="/media/${esc(g.art[k])}" alt="${k}">`).join("");
   $("dlg").innerHTML = `<button class="close" id="x">CLOSE</button><div class="dlg">
     <div class="box">${g.art.box ? `<img src="/media/${esc(g.art.box)}" alt="box art">` : ""}<div class="shots">${shots}</div></div>
@@ -277,10 +302,62 @@ function open(id) {
       <dl>${facts}${scores}</dl>
       <h3>Plays on</h3><div class="plays">${plays}</div>
       ${manual}
-      ${guides}
+      ${guides}${local}
       <h3>Files</h3><div class="files">${g.files.map(esc).join("\n")}</div></div></div>`;
   $("x").onclick = () => $("dlg").close();
-  $("dlg").showModal();
+  if (st) $("read").onclick = () => reader(g);
+  if (!$("dlg").open) $("dlg").showModal();
+}
+
+// The guide reader: its contents, a search over its sections (/api/guides/<id>/search), and the text.
+const GRADE_NOTE = {
+  partial: "StrategyWiki marks this guide as unfinished: later parts of the game may be missing.",
+  stub: "StrategyWiki marks this guide as barely begun: expect little beyond the basics.",
+  "hand-saved": "A guide saved by hand; no StrategyWiki walkthrough was found.",
+};
+function mdToHtml(md) {
+  return md.split(/\n{2,}/).map((block) => {
+    const h = block.match(/^(#{2,6}) (.*)$/);
+    if (h) return h[1].length <= 2 ? `<h3>${esc(h[2])}</h3>` : `<h4>${esc(h[2])}</h4>`;
+    if (block.startsWith("# ")) return "";
+    return `<p>${esc(block)}</p>`;
+  }).join("");
+}
+async function reader(g) {
+  const [meta, md] = await Promise.all([
+    fetch(`/api/guides/${g.id}`).then((r) => r.json()),
+    fetch(`/api/guides/${g.id}/text`).then((r) => r.text()),
+  ]);
+  const body = (sections) => sections.map((s) => `<div id="s${s.start}">${mdToHtml(md.slice(s.start, s.end))}</div>`).join("");
+  const toc = meta.sections.filter((s) => s.level <= 3)
+    .map((s) => `<a href="#" class="l${s.level}" data-s="${s.start}">${esc(s.title)}</a>`).join("");
+  const note = GRADE_NOTE[meta.grade];
+  $("dlg").innerHTML = `<button class="close" id="x">BACK</button><div class="reader">
+    <div class="top"><h2>${esc(g.title)}</h2><span class="grade ${esc(meta.grade)}">${esc(meta.grade)}</span></div>
+    ${note ? `<p class="warn">${esc(note)}</p>` : ""}
+    <div class="cols"><div><input type="search" id="gq" placeholder="Where are you? e.g. second boss, key, password" autocomplete="off">
+      <div class="toc" id="toc">${toc}</div></div>
+      <div class="body" id="gbody">${body(meta.sections)}</div></div>
+    <p class="src">${meta.source ? `From <a href="${esc(meta.source)}" target="_blank" rel="noopener">StrategyWiki</a>, by its contributors, under ${esc(meta.license)}.` : "Saved by hand."}</p></div>`;
+  $("x").onclick = () => open(g.id);
+  $("toc").onclick = (e) => {
+    const a = e.target.closest("a"); if (!a) return;
+    e.preventDefault();
+    const el = document.getElementById(`s${a.dataset.s}`);
+    if (el) $("gbody").scrollTop = el.offsetTop - $("gbody").offsetTop;
+  };
+  let t;
+  $("gq").oninput = (e) => {
+    clearTimeout(t);
+    t = setTimeout(async () => {
+      const q = e.target.value.trim();
+      if (!q) { $("gbody").innerHTML = body(meta.sections); return; }
+      const found = await fetch(`/api/guides/${g.id}/search?q=${encodeURIComponent(q)}`).then((r) => r.json());
+      $("gbody").innerHTML = found.sections.length ? found.sections.map((s) => mdToHtml(s.text)).join("<hr>")
+        : `<p class="sub">Nothing in the guide matches.</p>`;
+      $("gbody").scrollTop = 0;
+    }, 200);
+  };
 }
 
 // A click outside the box closes it: the backdrop's clicks land on the dialog itself. Only when the

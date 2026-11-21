@@ -93,6 +93,27 @@ devices play each system (brick-k8s-config#108).
   games get their GameFAQs page (GameCube 80 of 85, PlayStation 62 of 70,
   NES 577 of 701); Wikidata knows few DOS, 32X and Sega CD games, so most of
   those get the search link.
+- **Local strategy guides** (brick-games#21, the user, 2026-11-21): every
+  game ranked 80 and up (the page's Ranked score) gets its StrategyWiki
+  walkthrough kept on the LAN (`strategy.py`): the main page and every
+  subpage its Table of Contents links, as text, in the game's library folder
+  (`guide.md`, and `guide.json` with the source, license, grade and an index
+  of every heading) and copied to `DATA/strategy` for the page. The page is
+  the Wikidata link, or the game's title if StrategyWiki files it under the
+  system's platform (`strategywiki` in `systems.yaml`). The grade is
+  StrategyWiki's completion stage: complete (stages 3-5, the game can be
+  finished with it), partial (2), stub (0-1). StrategyWiki is CC BY-SA 4.0,
+  so each guide starts with its source and license. GameFAQs guides are
+  never downloaded (their authors' copyright, and GameFAQs forbids it); one
+  saved by hand into a game's library folder as `guide-gamefaqs.txt` is
+  added and indexed, whatever the game's rank. Guides are fetched for at most
+  30 minutes a scan and refreshed monthly; a failure keeps the old one
+  (`games_strategy_guides{result}`, `games_guide_grades{grade}`).
+  The game's details have READ THE GUIDE: its contents, a search ("where are
+  you?") over its sections, and a warning on a partial guide or a stub. For
+  an AI session: `/api/guides?q=<title>`, `/api/guides/<id>`,
+  `/api/guides/<id>/text` and `/api/guides/<id>/search?q=<words>` (the
+  `game-guide` skill in homelab-context).
 - **The game details** close with CLOSE, Escape, or a click outside them.
 
 A scan that can't reach a source still lists every game and the art and

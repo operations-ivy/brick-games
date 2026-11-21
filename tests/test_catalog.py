@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from brick_games import cache, catalog, guides, library, manuals, ratings, sources, web
+from brick_games import cache, catalog, guides, library, manuals, ratings, sources, strategy, web
 
 
 def png(w: int = 600, h: int = 800) -> bytes:
@@ -116,6 +116,7 @@ def offline(monkeypatch):
         return {kind: {sources.norm(n): [n] for n in names} for kind, names in thumbs.items()}
 
     monkeypatch.setattr(sources, "thumb_indexes", thumb_indexes)
+    monkeypatch.setattr(strategy, "api", lambda **params: {"query": {"pages": []}})  # no StrategyWiki guides
     monkeypatch.setattr(sources, "fetch_thumb", lambda system, kind, name: png())
     monkeypatch.setattr(sources, "metadata", lambda system: {sources.norm("Final Fight (USA)"): {"year": "1991", "genre": "Beat'em up"}})
     monkeypatch.setattr(catalog, "load_fbneo", lambda: (
@@ -195,6 +196,7 @@ def test_scan_without_network_still_lists_games(tmp_path, monkeypatch):
 
     monkeypatch.setattr(sources, "get", down)
     monkeypatch.setattr(sources, "github", down)
+    monkeypatch.setattr(strategy, "api", down)
     monkeypatch.setattr(ratings, "request", down)
     monkeypatch.setattr(manuals, "get", down)
     monkeypatch.setattr(guides, "sparql", down)

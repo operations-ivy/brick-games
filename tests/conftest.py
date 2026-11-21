@@ -32,6 +32,7 @@ def no_internet(monkeypatch):
 @pytest.fixture(autouse=True)
 def no_pauses(monkeypatch):
     """Wikidata's pacing (guides.PAUSE) is for the real service, not tests."""
-    from brick_games import guides
+    from brick_games import guides, strategy
 
     monkeypatch.setattr(guides, "PAUSE", 0)
+    monkeypatch.setattr(strategy, "PAUSE", 0)

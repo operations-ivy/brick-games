@@ -43,7 +43,7 @@ import brick_observe
 import yaml
 from PIL import Image
 
-from . import guides, library, manuals, ratings, sources
+from . import guides, library, manuals, ratings, sources, strategy
 
 log = brick_observe.get_logger(__name__)
 SYSTEMS_FILE = Path(__file__).with_name("systems.yaml")
@@ -86,6 +86,8 @@ class Stats:
         self.ratings: dict[str, dict[str, int]] = {}  # source -> result -> systems (ratings.RESULTS)
         self.manuals: dict[str, int] = {}  # result -> games (manuals.RESULTS)
         self.guides: dict[str, int] = {}  # result -> systems (guides.RESULTS)
+        self.strategy: dict[str, int] = {}  # result -> games ranked 80+ (strategy.RESULTS)
+        self.grades: dict[str, int] = {}  # grade -> games with a kept guide
 
     def fetched(self, result: str) -> None:
         self.fetches[result] += 1
@@ -413,7 +415,7 @@ class NoDrive(RuntimeError):
 
 def scan(root: Path, data: Path, lib: Path, stats: Stats | None = None, rater: ratings.Ratings | None = None,
          shelf: manuals.Manuals | None = None, guide: guides.Guides | None = None,
-         downloads: Downloads | None = None) -> dict:
+         downloads: Downloads | None = None, walkthroughs: strategy.Strategy | None = None) -> dict:
     if not library.on_drive(lib, root):
         raise NoDrive(f"{lib} is missing or not on the drive {root} is on; the catalog is left as it was")
     stats = stats or Stats()
@@ -421,6 +423,7 @@ def scan(root: Path, data: Path, lib: Path, stats: Stats | None = None, rater: r
     shelf = shelf or manuals.Manuals(data / "media")
     guide = guide or guides.Guides(data)
     downloads = downloads or Downloads()
+    walkthroughs = walkthroughs or strategy.Strategy(data, lib)
     config = load_systems()
     media = data / "media"
     media.mkdir(parents=True, exist_ok=True)
@@ -437,6 +440,9 @@ def scan(root: Path, data: Path, lib: Path, stats: Stats | None = None, rater: r
         if found:
             systems.append({k: system[k] for k in ("id", "name", "devices")}
                            | {"count": len(found), "guides": bool(system.get("wikidata"))})
+    walkthroughs.add(games, {s["id"]: s for s in config["systems"]})
+    stats.strategy = dict(walkthroughs.results)
+    stats.grades = dict(walkthroughs.grades)
     stats.ratings = rater.results
     stats.manuals = shelf.results
     stats.guides = guide.results

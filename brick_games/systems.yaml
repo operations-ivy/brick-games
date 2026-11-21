@@ -7,6 +7,8 @@
 #             reviewed (about 1995 on)
 #   wikidata: Wikidata platform items, for each game's GameFAQs and StrategyWiki
 #             links (guides.py)
+#   strategywiki: StrategyWiki's platform categories, to find a game's
+#             walkthrough by title when Wikidata has no link (strategy.py)
 #   manuals:  Internet Archive items with one PDF manual per game (manuals.py);
 #             none found for DS (names run together), Game Gear, PC Engine CD
 #             or arcade
@@ -32,6 +34,7 @@ systems:
     name: "Nintendo Entertainment System"
     folders: [nes]
     libretro: "Nintendo - Nintendo Entertainment System"
+    strategywiki: [NES]
     igdb: [18, 99, 51]
     wikidata: [Q172742]
     manuals: [NESManuals]
@@ -41,6 +44,7 @@ systems:
     name: "Super Nintendo"
     folders: [snes]
     libretro: "Nintendo - Super Nintendo Entertainment System"
+    strategywiki: [SNES]
     igdb: [19, 58]
     wikidata: [Q183259]
     manuals: [SNESManuals]
@@ -50,6 +54,7 @@ systems:
     name: "Game Boy / Color"
     folders: [gb, gbc]
     libretro: "Nintendo - Game Boy"
+    strategywiki: [Game Boy, Game Boy Color]
     igdb: [33, 22]
     wikidata: [Q186437, Q203992]
     manuals: [NintendoGameBoyManuals, NintendoGameBoyColorManuals]
@@ -59,6 +64,7 @@ systems:
     name: "Game Boy Advance"
     folders: [gba]
     libretro: "Nintendo - Game Boy Advance"
+    strategywiki: [Game Boy Advance]
     igdb: [24]
     wikidata: [Q188642]
     manuals: [NintendoGameBoyAdvanceManuals]
@@ -69,6 +75,7 @@ systems:
     name: "Nintendo 64"
     folders: [n64]
     libretro: "Nintendo - Nintendo 64"
+    strategywiki: [Nintendo 64]
     igdb: [4]
     manuals: [Nintendo64Manuals_201812]
     rawg: [83]
@@ -78,6 +85,7 @@ systems:
     name: "Nintendo DS"
     folders: [nds]
     libretro: "Nintendo - Nintendo DS"
+    strategywiki: [Nintendo DS]
     igdb: [20]
     rawg: [9]
     exts: [nds]
@@ -86,6 +94,7 @@ systems:
     name: "GameCube"
     folders: [gc]
     libretro: "Nintendo - GameCube"
+    strategywiki: [Nintendo GameCube]
     igdb: [21]
     wikidata: [Q182172]
     manuals: [NintendoGameCubeManuals]
@@ -96,6 +105,7 @@ systems:
     name: "Wii"
     folders: [Wii]
     libretro: "Nintendo - Wii"
+    strategywiki: [Wii]
     igdb: [5]
     manuals: [wii-manuals_202508]
     rawg: [11]
@@ -105,6 +115,7 @@ systems:
     name: "Genesis / Mega Drive"
     folders: [megadrive]
     libretro: "Sega - Mega Drive - Genesis"
+    strategywiki: [Sega Genesis]
     igdb: [29]
     wikidata: [Q10676]
     manuals: [SEGAGenesisMegaDriveManuals]
@@ -114,6 +125,7 @@ systems:
     name: "Game Gear"
     folders: [gamegear]
     libretro: "Sega - Game Gear"
+    strategywiki: [Sega Game Gear]
     igdb: [35]
     wikidata: [Q751719]
     exts: [gg, zip]
@@ -122,6 +134,7 @@ systems:
     name: "Sega 32X"
     folders: [sega32x]
     libretro: "Sega - 32X"
+    strategywiki: [Sega 32X]
     igdb: [30]
     wikidata: [Q1063978]
     manuals: [SEGA32XManuals_201812]
@@ -131,6 +144,7 @@ systems:
     name: "Sega CD"
     folders: [segacd]
     libretro: "Sega - Mega-CD - Sega CD"
+    strategywiki: [Sega CD]
     igdb: [78]
     wikidata: [Q1047516]
     manuals: [SEGACDManuals]
@@ -140,6 +154,7 @@ systems:
     name: "Sega Saturn"
     folders: [segasaturn]
     libretro: "Sega - Saturn"
+    strategywiki: [Sega Saturn]
     igdb: [32]
     wikidata: [Q200912]
     manuals: [SEGASaturnManuals_201812]
@@ -150,6 +165,7 @@ systems:
     name: "Dreamcast"
     folders: [Dreamcast]
     libretro: "Sega - Dreamcast"
+    strategywiki: [Sega Dreamcast]
     igdb: [23]
     wikidata: [Q184198]
     manuals: [SEGADreamcastManuals_201812]
@@ -160,6 +176,7 @@ systems:
     name: "PC Engine / TurboGrafx-16"
     folders: [pcengine]
     libretro: "NEC - PC Engine - TurboGrafx 16"
+    strategywiki: [TurboGrafx-16]
     igdb: [86]
     manuals: [NECTurboGrafx-16Manuals]
     exts: [pce]
@@ -168,6 +185,7 @@ systems:
     name: "PC Engine CD"
     folders: [pcengine]
     libretro: "NEC - PC Engine CD - TurboGrafx-CD"
+    strategywiki: [TurboGrafx-CD]
     igdb: [150]
     exts: [cue, chd]
     devices: {brick9000: no, rp2plus: good, rg476h: good}
@@ -175,6 +193,7 @@ systems:
     name: "PlayStation"
     folders: [psx]
     libretro: "Sony - PlayStation"
+    strategywiki: [PlayStation]
     igdb: [7]
     wikidata: [Q10677]
     manuals: [SonyPlaystationManuals]
@@ -185,6 +204,7 @@ systems:
     name: "PlayStation 2"
     folders: [PS2]
     libretro: "Sony - PlayStation 2"
+    strategywiki: [PlayStation 2]
     igdb: [8]
     wikidata: [Q10680]
     manuals: [SonyPlaystation2Manuals_201812]
@@ -195,6 +215,7 @@ systems:
     name: "PlayStation Portable"
     folders: [psp]
     libretro: "Sony - PlayStation Portable"
+    strategywiki: [PlayStation Portable]
     igdb: [38]
     manuals: [SonyPSPManuals]
     rawg: [17]
@@ -204,6 +225,7 @@ systems:
     name: "Neo Geo"
     folders: [neogeo]
     libretro: "SNK - Neo Geo"
+    strategywiki: [Neo Geo, Arcade]
     igdb: [80, 79]
     manuals: [SNKNeoGeoMVSManuals]
     exts: [zip]
@@ -213,6 +235,7 @@ systems:
     name: "Arcade (FinalBurn Neo)"
     folders: [fba, fba-retroid]
     libretro: "FBNeo - Arcade Games"
+    strategywiki: [Arcade]
     igdb: [52]
     fetch: false
     exts: [zip]
@@ -222,6 +245,7 @@ systems:
     name: "DOS"
     folders: [dos]
     libretro: "DOS"
+    strategywiki: [DOS]
     igdb: [13]
     wikidata: [Q170434, Q47604, Q751046]
     exts: [zip]
