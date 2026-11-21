@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+from collections import defaultdict
 import hashlib
 import json
 import os
@@ -95,6 +96,9 @@ class Local:
     def join(self, root: str, name: str) -> str:
         return str(Path(os.path.expanduser(root)) / name)
 
+    def exists(self, path: str) -> bool:
+        return Path(os.path.expanduser(path)).exists()
+
 
 class Adb:
     """A handheld's files, over adb (USB or wireless debugging)."""
@@ -135,6 +139,9 @@ class Adb:
 
     def join(self, root: str, name: str) -> str:
         return posixpath.join(root, name)
+
+    def exists(self, path: str) -> bool:
+        return self._adb("shell", f"[ -e {shlex.quote(path)} ] && echo yes || true").strip() == b"yes"
 
 
 class Server:
@@ -181,6 +188,7 @@ def find_saves(fs, cfg: dict, games: Games, roms: dict[str, str] | None = None) 
     found: dict[str, tuple[str, int, float]] = {}
     on_device = set(roms) if roms is not None else None
     for root in cfg["roots"]:
+        folders = core_folders(root)
         for path, size, mtime in fs.list(root["path"], root.get("recursive", False)):
             name = posixpath.basename(path)
             if name.startswith(".") or not any(fnmatch.fnmatch(name, p) for p in root.get("match", ["*"])):
@@ -188,7 +196,9 @@ def find_saves(fs, cfg: dict, games: Games, roms: dict[str, str] | None = None) 
             stem = stem_of(name)
             if root.get("strip") and stem.endswith(root["strip"]):
                 stem = stem[: -len(root["strip"])]
-            game_id = games.match(stem, root.get("system"), on_device)
+            # A save in a core's folder (mGBA/) is that core's system's: TMNT is GBA, GameCube and arcade.
+            folder = posixpath.basename(posixpath.dirname(path))
+            game_id = games.match(stem, root.get("system") or folders.get(folder), on_device)
             if game_id is None or games.by_id[game_id]["system"] in cfg.get("skip", []):
                 continue
             kind = kind_of(games.by_id[game_id]["system"])
@@ -197,6 +207,20 @@ def find_saves(fs, cfg: dict, games: Games, roms: dict[str, str] | None = None) 
             if game_id not in found or mtime > found[game_id][2]:
                 found[game_id] = (path, size, mtime)
     return found
+
+
+def core_folders(root: dict) -> dict[str, str]:
+    """folder -> system, from a root's per-system `write` names (Snes9x/ -> snes),
+    for folders only one system writes to."""
+    write = root.get("write")
+    if not isinstance(write, dict):
+        return {}
+    seen: defaultdict[str, set[str]] = defaultdict(set)
+    for system, name in write.items():
+        folder, sep, _ = name.partition("/")
+        if sep:
+            seen[folder].add(system)
+    return {folder: next(iter(systems)) for folder, systems in seen.items() if len(systems) == 1}
 
 
 def rom_stems(fs, cfg: dict, games: Games) -> dict[str, str]:
@@ -279,6 +303,9 @@ def sync(server: Server, fs, device: str, state_file: Path, dry_run: bool = Fals
         else:
             if not stems or game_id not in stems or (path := new_path(fs, cfg, game, stems[game_id])) is None:
                 continue  # the game isn't on this device
+            if fs.exists(path):  # a save there that wasn't matched to this game: never written over
+                say(f"skip    {game['title']}: {posixpath.basename(path)} is already there (not matched; left alone)")
+                continue
         say(f"write   {game['title']}: {posixpath.basename(path)} (the current version)")
         if dry_run:
             continue
