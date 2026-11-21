@@ -27,3 +27,11 @@ def no_internet(monkeypatch):
     yield
     # Checked here, not only raised: the scan swallows source errors by design.
     assert not reached, f"a test reached the internet: {reached}"
+
+
+@pytest.fixture(autouse=True)
+def no_pauses(monkeypatch):
+    """Wikidata's pacing (guides.PAUSE) is for the real service, not tests."""
+    from brick_games import guides
+
+    monkeypatch.setattr(guides, "PAUSE", 0)

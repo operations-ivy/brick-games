@@ -11,7 +11,8 @@ their parent set (clones are variants of the same game).
 Art comes from libretro's thumbnails into MEDIA (box art, title screen,
 screenshot; downscaled, fetched once and kept), facts from libretro-database,
 ratings from IGDB and RAWG when their keys are set (ratings.py), manuals
-from the Internet Archive's manual sets into MEDIA (manuals.py).
+from the Internet Archive's manual sets into MEDIA (manuals.py), and
+strategy guide links found through Wikidata (guides.py).
 The catalog names each picture with `?v=<its content hash>`, so the page can
 cache art for a year and still see a changed picture as a new URL.
 A system whose sources can't be reached still lists its games, without art.
@@ -34,7 +35,7 @@ import brick_observe
 import yaml
 from PIL import Image
 
-from . import manuals, ratings, sources
+from . import guides, manuals, ratings, sources
 
 log = brick_observe.get_logger(__name__)
 SYSTEMS_FILE = Path(__file__).with_name("systems.yaml")
@@ -70,6 +71,7 @@ class Stats:
         self.fetches = {"ok": 0, "missing": 0, "error": 0, "converted": 0}
         self.ratings: dict[str, dict[str, int]] = {}  # source -> result -> systems (ratings.RESULTS)
         self.manuals: dict[str, int] = {}  # result -> games (manuals.RESULTS)
+        self.guides: dict[str, int] = {}  # result -> systems (guides.RESULTS)
 
     def fetched(self, result: str) -> None:
         self.fetches[result] += 1
@@ -254,7 +256,7 @@ def add_manuals(games: list[dict], system: dict, shelf: manuals.Manuals) -> None
 
 
 def scan_system(root: Path, media: Path, system: dict, fbneo: tuple[dict, dict], stats: Stats,
-                rater: ratings.Ratings, shelf: manuals.Manuals) -> list[dict]:
+                rater: ratings.Ratings, shelf: manuals.Manuals, guide: guides.Guides) -> list[dict]:
     titles, parents = fbneo if system.get("arcade") else ({}, {})
     files = find_files(root, system)
     games = group(files, system, titles, parents)
@@ -265,6 +267,7 @@ def scan_system(root: Path, media: Path, system: dict, fbneo: tuple[dict, dict],
         log.warning("sources unreachable; listing without art", system=system["id"], error=str(e))
         indexes, facts = {}, {}
     scored = rater.for_system(system) if games else ({}, {})  # no fetch for an empty system
+    linked = guide.for_system(system) if games else {}
     jobs = []
     for game in games:
         game["id"] = slug(system["id"], game["key"])
@@ -273,6 +276,8 @@ def scan_system(root: Path, media: Path, system: dict, fbneo: tuple[dict, dict],
         name = game["source_name"]
         game.update(facts.get(sources.norm(name), {}))
         game.update(ratings.scores(scored, name))
+        if links := ratings.match(linked, name):
+            game["guides"] = links
         for kind, index in indexes.items():
             cands = sources.lookup(index, name)
             if cands:
@@ -291,7 +296,8 @@ def scan_system(root: Path, media: Path, system: dict, fbneo: tuple[dict, dict],
     stats.per_system[system["id"]] = {"files": len(files), "games": len(games),
                                       "with_box_art": sum(1 for g in games if "box" in g["art"]),
                                       "with_rating": sum(1 for g in games if ratings.has_score(g)),
-                                      "with_manual": sum(1 for g in games if "manual" in g)}
+                                      "with_manual": sum(1 for g in games if "manual" in g),
+                                      "with_guide": sum(1 for g in games if "guides" in g)}
     for game in games:
         del game["key"], game["source_name"]
         game["files"] = [str(f.relative_to(root)) for f in game["files"]]
@@ -317,10 +323,11 @@ def unchanged(path: Path, catalog: dict) -> bool:
 
 
 def scan(root: Path, data: Path, stats: Stats | None = None, rater: ratings.Ratings | None = None,
-         shelf: manuals.Manuals | None = None) -> dict:
+         shelf: manuals.Manuals | None = None, guide: guides.Guides | None = None) -> dict:
     stats = stats or Stats()
     rater = rater or ratings.Ratings(data)
     shelf = shelf or manuals.Manuals(data / "media")
+    guide = guide or guides.Guides(data)
     config = load_systems()
     media = data / "media"
     media.mkdir(parents=True, exist_ok=True)
@@ -331,12 +338,14 @@ def scan(root: Path, data: Path, stats: Stats | None = None, rater: ratings.Rati
         fbneo = ({}, {})
     games, systems = [], []
     for system in config["systems"]:
-        found = scan_system(root, media, system, fbneo, stats, rater, shelf)
+        found = scan_system(root, media, system, fbneo, stats, rater, shelf, guide)
         games += found
         if found:
-            systems.append({k: system[k] for k in ("id", "name", "devices")} | {"count": len(found)})
+            systems.append({k: system[k] for k in ("id", "name", "devices")}
+                           | {"count": len(found), "guides": bool(system.get("wikidata"))})
     stats.ratings = rater.results
     stats.manuals = shelf.results
+    stats.guides = guide.results
     catalog = {"generated": int(time.time()), "devices": config["devices"], "systems": systems, "games": games}
     if unchanged(data / "catalog.json", catalog):
         # Left alone, so its ETag stays and browsers keep their copy.
