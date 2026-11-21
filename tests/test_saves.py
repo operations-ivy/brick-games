@@ -165,3 +165,12 @@ def test_the_service_lists_games_and_serves_the_agent(service):
         assert b"def sync(" in r.read()
     with urllib.request.urlopen(f"{base}/api/saves/config?device=rp2plus") as r:
         assert json.loads(r.read())["name"] == "Retroid"
+
+
+def test_a_name_two_systems_share_goes_by_the_rom_on_the_device():
+    cat = {"games": [{"id": "s" * 16, "system": "snes", "title": "Breath of Fire II", "files": ["snes/Breath of Fire II.sfc"]},
+                     {"id": "g" * 16, "system": "gba", "title": "Breath of Fire II", "files": ["gba/Breath of Fire II.gba"]}],
+           "systems": [{"id": "snes", "exts": ["sfc"]}, {"id": "gba", "exts": ["gba"]}]}
+    games = saves_agent.Games(cat)
+    assert games.match("Breath of Fire II") is None  # two systems: no guess
+    assert games.match("Breath of Fire II", on_device={"s" * 16}) == "s" * 16

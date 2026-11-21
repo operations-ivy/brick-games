@@ -156,15 +156,20 @@ class Games:
         for system in catalog.get("systems", []):  # each system's game files (systems.yaml's exts)
             self.exts.setdefault(system["id"], set()).update(f".{e.lower()}" for e in system.get("exts", []))
 
-    def match(self, name: str, system: str | None = None) -> str | None:
-        """The game id a name is, or None (no match, or names in two systems)."""
-        hits = {(s, i) for s, i in self.keys.get(norm(name), set()) if system is None or s == system}
-        return next(iter(hits))[1] if len({i for _, i in hits}) == 1 else None
+    def match(self, name: str, system: str | None = None, on_device: set[str] | None = None) -> str | None:
+        """The game id a name is, or None: no match, or games in two systems
+        that the device's ROMs (on_device: game ids) don't tell apart."""
+        ids = {i for s, i in self.keys.get(norm(name), set()) if system is None or s == system}
+        if len(ids) > 1 and on_device is not None:
+            ids &= on_device  # Breath of Fire II is SNES and GBA: the one whose ROM is here
+        return next(iter(ids)) if len(ids) == 1 else None
 
 
-def find_saves(fs, cfg: dict, games: Games) -> dict[str, tuple[str, int, float]]:
-    """game id -> this device's save for it (the newest, if it has several)."""
+def find_saves(fs, cfg: dict, games: Games, roms: dict[str, str] | None = None) -> dict[str, tuple[str, int, float]]:
+    """game id -> this device's save for it (the newest, if it has several).
+    roms (game id -> ROM stem on the device) settles a name two systems share."""
     found: dict[str, tuple[str, int, float]] = {}
+    on_device = set(roms) if roms is not None else None
     for root in cfg["roots"]:
         for path, size, mtime in fs.list(root["path"], root.get("recursive", False)):
             name = posixpath.basename(path)
@@ -173,7 +178,7 @@ def find_saves(fs, cfg: dict, games: Games) -> dict[str, tuple[str, int, float]]
             stem = stem_of(name)
             if root.get("strip") and stem.endswith(root["strip"]):
                 stem = stem[: -len(root["strip"])]
-            game_id = games.match(stem, root.get("system"))
+            game_id = games.match(stem, root.get("system"), on_device)
             if game_id is None:
                 continue
             kind = kind_of(games.by_id[game_id]["system"])
@@ -218,7 +223,8 @@ def sync(server: Server, fs, device: str, state_file: Path, dry_run: bool = Fals
         query = {"device": device, "name": posixpath.basename(path), "mtime": str(mtime), "parent": parent or ""}
         return server.json("POST", f"/api/saves/{game_id}/upload", data, query)
 
-    found = find_saves(fs, cfg, games)
+    stems = rom_stems(fs, cfg, games) if cfg.get("roms") else None
+    found = find_saves(fs, cfg, games, stems)
     states: dict[str, dict] = {}
     for game_id, (path, _, mtime) in sorted(found.items()):
         data = fs.read(path)
@@ -236,7 +242,6 @@ def sync(server: Server, fs, device: str, state_file: Path, dry_run: bool = Fals
         done["uploaded"] += 1
 
     summary = server.json("GET", "/api/saves")["games"]
-    stems = None
     for entry in summary:
         game_id, head = entry["game"], entry["head"]
         game = games.by_id.get(game_id)
@@ -255,9 +260,7 @@ def sync(server: Server, fs, device: str, state_file: Path, dry_run: bool = Fals
             if current != here.get("sha"):  # changed here since: it was uploaded above
                 continue
         else:
-            if stems is None:
-                stems = rom_stems(fs, cfg, games)
-            if game_id not in stems or (path := new_path(fs, cfg, game, stems[game_id])) is None:
+            if not stems or game_id not in stems or (path := new_path(fs, cfg, game, stems[game_id])) is None:
                 continue  # the game isn't on this device
         say(f"write   {game['title']}: {posixpath.basename(path)} (the current version)")
         if dry_run:
