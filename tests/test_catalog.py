@@ -2,6 +2,8 @@ import gzip
 import hashlib
 import io
 import json
+import os
+import shutil
 import threading
 import urllib.error
 import urllib.request
@@ -11,7 +13,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from brick_games import catalog, guides, manuals, ratings, sources, web
+from brick_games import cache, catalog, guides, library, manuals, ratings, sources, web
 
 
 def png(w: int = 600, h: int = 800) -> bytes:
@@ -110,13 +112,10 @@ def offline(monkeypatch):
     thumbs = {"Named_Boxarts": ["Final Fight (USA).png", "Street Fighter II (World).png"], "Named_Titles": [],
               "Named_Snaps": []}
 
-    def thumb_index(system, kind):
-        index = {}
-        for name in thumbs[kind]:
-            index.setdefault(sources.norm(name), []).append(name)
-        return index
+    def thumb_indexes(system, cache=None):
+        return {kind: {sources.norm(n): [n] for n in names} for kind, names in thumbs.items()}
 
-    monkeypatch.setattr(sources, "thumb_index", thumb_index)
+    monkeypatch.setattr(sources, "thumb_indexes", thumb_indexes)
     monkeypatch.setattr(sources, "fetch_thumb", lambda system, kind, name: png())
     monkeypatch.setattr(sources, "metadata", lambda system: {sources.norm("Final Fight (USA)"): {"year": "1991", "genre": "Beat'em up"}})
     monkeypatch.setattr(catalog, "load_fbneo", lambda: (
@@ -135,18 +134,29 @@ def offline(monkeypatch):
                         and "FILTER NOT EXISTS" not in q else [])
 
 
-def test_scan_groups_games_fetches_art_and_writes_the_catalog(tmp_path, offline):
-    roms, data = tmp_path / "roms", tmp_path / "data"
+def dirs(tmp_path):
+    """roms, data and the library (on one filesystem, as on the drive)."""
+    roms, data, lib = tmp_path / "roms", tmp_path / "data", tmp_path / "library"
     make_tree(roms)
+    lib.mkdir()
+    return roms, data, lib
+
+
+def test_scan_groups_games_fetches_art_and_writes_the_catalog(tmp_path, offline):
+    roms, data, lib = dirs(tmp_path)
     stats = catalog.Stats()
-    cat = catalog.scan(roms, data, stats)
+    cat = catalog.scan(roms, data, lib, stats)
     by_title = {g["title"]: g for g in cat["games"]}
     # two regions of one game, one entry; the .txt ignored
     ff = by_title["Final Fight"]
     assert len(ff["files"]) == 2 and ff["year"] == "1991" and ff["genre"] == "Beat'em up"
     assert ff["critics"] == 77 and ff["critic_reviews"] == 6 and "metascore" not in ff
-    manual = ff["manual"].partition("?v=")[0]
-    assert manual.startswith("snes/manuals/") and (data / "media" / manual).read_bytes().startswith(b"%PDF")
+    assert ff["manual"].startswith(f"snes/manuals/{ff['id']}.pdf?v=")
+    folder = lib / "snes" / "media" / "Final Fight"  # the library: one folder per game, by title
+    assert (folder / "manual.pdf").read_bytes().startswith(b"%PDF")
+    assert library.read_index(lib, "snes") == {ff["id"]: "Final Fight"}
+    with Image.open(folder / "box.png") as im:
+        assert im.format == "PNG" and im.size == (600, 800)  # the original, as downloaded
     assert by_title["Shenmue"]["metascore"] == 88
     assert ff["guides"] == {"gamefaqs": "588397", "strategywiki": "Final_Fight"}
     assert "guides" not in by_title["Shenmue"]  # no match: the page links a GameFAQs search
@@ -168,7 +178,7 @@ def test_scan_groups_games_fetches_art_and_writes_the_catalog(tmp_path, offline)
     # a second scan downloads nothing again
     before = dict(stats.fetches)
     written = (data / "catalog.json").stat().st_mtime_ns
-    again = catalog.scan(roms, data, stats)
+    again = catalog.scan(roms, data, lib, stats)
     # nothing changed, so the file (and the page's ETag) is left as it was
     assert (data / "catalog.json").stat().st_mtime_ns == written
     assert stats.fetches == before
@@ -178,19 +188,19 @@ def test_scan_groups_games_fetches_art_and_writes_the_catalog(tmp_path, offline)
 
 
 def test_scan_without_network_still_lists_games(tmp_path, monkeypatch):
-    roms, data = tmp_path / "roms", tmp_path / "data"
-    make_tree(roms)
+    roms, data, lib = dirs(tmp_path)
 
     def down(*a, **k):
         raise OSError("no network")
 
     monkeypatch.setattr(sources, "get", down)
+    monkeypatch.setattr(sources, "github", down)
     monkeypatch.setattr(ratings, "request", down)
     monkeypatch.setattr(manuals, "get", down)
     monkeypatch.setattr(guides, "sparql", down)
     keys = {"IGDB_CLIENT_ID": "i", "IGDB_CLIENT_SECRET": "s", "RAWG_KEY": "k"}  # keys set, network down
     stats = catalog.Stats()
-    cat = catalog.scan(roms, data, stats, rater=ratings.Ratings(data, keys))
+    cat = catalog.scan(roms, data, lib, stats, rater=ratings.Ratings(data, keys))
     assert {g["title"] for g in cat["games"]} >= {"Final Fight", "Shenmue"}
     assert all(not g["art"] for g in cat["games"])
     assert (data / "catalog.json").exists()  # ratings down doesn't fail the scan
@@ -216,17 +226,63 @@ def fetch(url):
         return e.code, e.read()
 
 
-def test_cached_png_art_is_converted_not_downloaded(tmp_path, monkeypatch):
-    media = tmp_path / "media"
-    old = media / "snes" / "Named_Titles" / "0123456789abcdef.png"
-    old.parent.mkdir(parents=True)
-    old.write_bytes(png(320, 224))
+def test_kept_art_is_listed_when_the_thumbnails_are_unreachable(tmp_path, offline, monkeypatch):
+    """2026-11-20: thumbnails.libretro.com went empty and every picture left the catalog."""
+    roms, data, lib = dirs(tmp_path)
+    first = {g["title"]: g["art"] for g in catalog.scan(roms, data, lib)["games"]}
+
+    def down(system, cache=None):
+        raise OSError("HTTP Error 404: Not Found")
+
+    monkeypatch.setattr(sources, "thumb_indexes", down)
+    again = {g["title"]: g["art"] for g in catalog.scan(roms, data, lib)["games"]}
+    assert again["Final Fight"] == first["Final Fight"] and again["Final Fight"]["box"]
+
+
+def test_art_is_built_from_the_kept_original_and_rebuilt_when_it_changes(tmp_path, monkeypatch):
+    cache_dir, original = tmp_path / "media", tmp_path / "library" / "snes" / "media" / "T" / "title.png"
+    original.parent.mkdir(parents=True)
+    original.write_bytes(png(320, 224))
     monkeypatch.setattr(sources, "fetch_thumb", lambda *a: pytest.fail("downloaded again"))
-    rel, result = catalog.get_art(media, {"id": "snes", "libretro": "x"}, "Named_Titles", "T.png", "0123456789abcdef")
-    assert result == "converted" and rel.startswith("snes/Named_Titles/0123456789abcdef.avif?v=")
-    assert not old.exists()
-    with Image.open(media / rel.partition("?")[0]) as im:
+    system = {"id": "snes", "libretro": "x"}
+    rel, result = catalog.get_art(cache_dir, system, "Named_Titles", "T.png", "0123456789abcdef", original,
+                                  catalog.Downloads())
+    assert result == "built" and rel.startswith("snes/Named_Titles/0123456789abcdef.avif?v=")
+    with Image.open(cache_dir / rel.partition("?")[0]) as im:
         assert im.format == "AVIF" and im.size == (320, 224)  # screens keep their size
+    # unchanged: nothing to do; a newer original: built again, with a new version
+    assert catalog.get_art(cache_dir, system, "Named_Titles", None, "0123456789abcdef", original,
+                           catalog.Downloads()) == (rel, None)
+    original.write_bytes(png(256, 224))
+    later = (cache_dir / rel.partition("?")[0]).stat().st_mtime + 10
+    os.utime(original, (later, later))
+    rel2, result = catalog.get_art(cache_dir, system, "Named_Titles", None, "0123456789abcdef", original,
+                                   catalog.Downloads())
+    assert result == "built" and rel2 != rel
+
+
+def test_a_rate_limit_defers_the_rest_of_the_downloads(tmp_path, monkeypatch):
+    calls = []
+
+    def limited(*a):
+        calls.append(a)
+        raise sources.RateLimited("429")
+
+    monkeypatch.setattr(sources, "fetch_thumb", limited)
+    downloads, system = catalog.Downloads(), {"id": "snes", "libretro": "x"}
+    for i in range(3):
+        original = tmp_path / "library" / f"g{i}" / "box.png"
+        assert catalog.get_art(tmp_path / "media", system, "Named_Boxarts", "X.png", f"{i:016x}", original,
+                               downloads) == (None, "deferred")
+    assert len(calls) == 1 and downloads.limited
+
+
+def test_the_scan_needs_the_drive(tmp_path, offline):
+    roms, data, lib = dirs(tmp_path)
+    lib.rmdir()
+    with pytest.raises(catalog.NoDrive):
+        catalog.scan(roms, data, lib)
+    assert not (data / "catalog.json").exists()
 
 
 def test_web_serves_page_catalog_and_media_only(server):
@@ -250,12 +306,20 @@ def test_web_serves_page_catalog_and_media_only(server):
     assert fetch(base + "/metrics")[0] == 200
 
 
+def put_manual(data: Path, body: bytes, game_id: str = "0123456789abcdef") -> Path:
+    """A manual in the library (the web app's default, DATA/library), filed by media.json."""
+    lib = data / "library"
+    pdf = lib / "snes" / "media" / "Super Metroid" / "manual.pdf"
+    pdf.parent.mkdir(parents=True, exist_ok=True)
+    pdf.write_bytes(body)
+    (lib / "snes" / "media.json").write_text(json.dumps({game_id: "Super Metroid"}))
+    return pdf
+
+
 def test_web_streams_manuals_as_pdf(server):
     base, data = server
-    pdf = data / "media" / "snes" / "manuals" / "0123456789abcdef.pdf"
-    pdf.parent.mkdir(parents=True)
     body = b"%PDF-1.4 " + bytes(range(256)) * 4000  # ~1 MB: several stream chunks
-    pdf.write_bytes(body)
+    put_manual(data, body)
     with urllib.request.urlopen(base + "/media/snes/manuals/0123456789abcdef.pdf?v=1") as r:
         assert r.headers["Content-Type"] == "application/pdf"
         assert int(r.headers["Content-Length"]) == len(body) and r.read() == body
@@ -371,3 +435,82 @@ def test_versioned_art_is_immutable_and_revalidates(server):
 ])
 def test_accepts_gzip(header, ok):
     assert web.accepts_gzip(header) is ok
+
+
+def test_manuals_come_from_nvme_after_the_first_read(server):
+    base, data = server
+    origin = put_manual(data, b"%PDF-1.4 the manual")
+    url = base + "/media/snes/manuals/0123456789abcdef.pdf?v=1"
+    status, h, got = get(url)
+    hot = data / "manual-cache" / "snes" / "0123456789abcdef.pdf"
+    assert status == 200 and got == b"%PDF-1.4 the manual" and hot.read_bytes() == got
+    origin.unlink()  # from now on only the cache has it
+    status, h2, got = get(url)
+    assert status == 200 and got == b"%PDF-1.4 the manual" and h2["ETag"] == h["ETag"]
+
+
+def test_a_manual_not_cached_is_503_with_the_drive_offline(server):
+    base, data = server
+    put_manual(data, b"%PDF-1.4 cached", "00000000000000aa")
+    assert get(base + "/media/snes/manuals/00000000000000aa.pdf")[0] == 200
+    shutil.rmtree(data / "library")  # the drive unplugged
+    assert get(base + "/media/snes/manuals/00000000000000aa.pdf")[0] == 200  # still on NVMe
+    status, h, _ = get(base + "/media/snes/manuals/00000000000000bb.pdf")
+    assert status == 503 and h["Retry-After"]
+
+
+def test_the_manual_cache_drops_the_least_recently_opened(tmp_path):
+    lib = tmp_path / "library"
+    index = {}
+    for i in range(3):
+        game_id = f"{i:016x}"
+        folder = lib / "snes" / "media" / f"Game {i}"
+        folder.mkdir(parents=True)
+        (folder / "manual.pdf").write_bytes(b"%PDF" + b"x" * 96)  # 100 bytes each
+        index[game_id] = f"Game {i}"
+    (lib / "snes" / "media.json").write_text(json.dumps(index))
+    shelf = cache.ManualCache(tmp_path / "manual-cache", lib, limit=250)
+    hot = tmp_path / "manual-cache" / "snes"
+    for i, game_id in enumerate((f"{0:016x}", f"{1:016x}")):
+        f, tier = shelf.open("snes", game_id)
+        f.close()
+        assert tier == "origin"
+        os.utime(hot / f"{game_id}.pdf", (1_700_000_000 + i, 1_700_000_000))  # 1 opened after 0
+    shelf.open("snes", f"{0:016x}")[0].close()  # 0 opened again (now): 1 is the oldest
+    shelf.open("snes", f"{2:016x}")[0].close()  # over 250 bytes: 1 goes
+    kept = sorted(f.stem for f in (tmp_path / "manual-cache" / "snes").iterdir())
+    assert kept == [f"{0:016x}", f"{2:016x}"]
+
+
+def test_a_new_original_keeps_the_cached_avif(tmp_path, monkeypatch):
+    """0.7.0's first fill: every download re-encoded art already cached (and changed its URL)."""
+    cache_dir = tmp_path / "media"
+    dest = cache_dir / "snes" / "Named_Boxarts" / "0123456789abcdef.avif"
+    dest.parent.mkdir(parents=True)
+    dest.write_bytes(catalog.shrink(png(), "Named_Boxarts"))
+    old = 1_700_000_000
+    os.utime(dest, (old, old))
+    monkeypatch.setattr(sources, "fetch_thumb", lambda *a: png())
+    monkeypatch.setattr(catalog, "shrink", lambda *a: pytest.fail("built again"))
+    original = tmp_path / "library" / "snes" / "media" / "G" / "box.png"
+    rel, result = catalog.get_art(cache_dir, {"id": "snes", "libretro": "x"}, "Named_Boxarts", "G.png",
+                                  "0123456789abcdef", original, catalog.Downloads())
+    assert result == "ok" and original.exists() and original.stat().st_mtime == dest.stat().st_mtime
+    assert rel == catalog.versioned("snes/Named_Boxarts/0123456789abcdef.avif", dest.read_bytes())
+
+
+def test_a_system_with_fetch_off_downloads_nothing_but_keeps_its_art(tmp_path, offline, monkeypatch):
+    roms, data, lib = dirs(tmp_path)
+    config = catalog.load_systems()
+    arcade = next(s for s in config["systems"] if s["id"] == "arcade")
+    assert arcade["fetch"] is False  # as systems.yaml has it
+    monkeypatch.setattr(catalog, "load_systems", lambda: config)
+    arcade["fetch"] = True  # first, art kept from before
+    first = {g["title"]: g["art"] for g in catalog.scan(roms, data, lib)["games"]}
+    assert first["Street Fighter II"]["box"]
+    arcade["fetch"] = False
+    asked = []
+    monkeypatch.setattr(sources, "thumb_indexes", lambda system, cache=None: asked.append(system) or {})
+    again = {g["title"]: g["art"] for g in catalog.scan(roms, data, lib)["games"]}
+    assert again["Street Fighter II"] == first["Street Fighter II"]
+    assert "FBNeo - Arcade Games" not in asked

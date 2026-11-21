@@ -1,14 +1,16 @@
 """games.brick.nozdormu.cloud: the catalog page.
 
-LAN only and read-only: it serves the page, the catalog the scan wrote, and
-the cached art. Nothing here touches the ROMs.
+LAN only: it serves the page, the catalog the scan wrote, the art and the
+manuals. Nothing here touches the ROMs; the library on the drive is only read.
 
     GET  /                  the page
     GET  /api/catalog       catalog.json (systems, devices, games)
-    GET  /media/<path>.avif art from the cache (paths checked to stay inside it;
-                            .png until the cache is converted)
+    GET  /media/<path>.avif art from the cache on NVMe (paths checked to stay
+                            inside it); never the drive
     GET  /media/<system>/manuals/<id>.pdf
-                            a game's manual (manuals.py), streamed
+                            a game's manual, streamed: from the manual cache on
+                            NVMe, or copied in from the library first (cache.py);
+                            503 when it isn't cached and the drive is offline
     GET  /health /ready /metrics
 
 Caching (README "Caching"): the page and the catalog carry a strong ETag (the
@@ -18,6 +20,7 @@ accept it. The catalog is re-read and re-hashed only when the file changes
 (inode, mtime or size), not per request. Art has an ETag from its mtime and
 size; a request with `?v=<content hash>` (the scan writes those URLs into the
 catalog) is cached for a year as immutable, since changed art gets a new `v`.
+Manuals the same way, their ETag from the original's mtime and size.
 """
 
 from __future__ import annotations
@@ -40,6 +43,8 @@ import brick_observe
 from brick_observe import metrics as observe_metrics
 from prometheus_client import Counter
 
+from .cache import ManualCache, Offline
+
 log = brick_observe.get_logger(__name__)
 PAGE_FILE = Path(__file__).parent / "static" / "index.html"
 MEDIA_PATH = re.compile(r"^/media/(?P<rel>[a-z0-9]+/(?:Named_(?:Boxarts|Titles|Snaps)/[0-9a-f]{16}\.(?P<art>avif|png)"
@@ -49,10 +54,15 @@ STREAM_CHUNK = 256 * 1024  # media is sent in pieces: a manual can be tens of MB
 REQUESTS = Counter("games_web_requests_total", "Requests, by route and status", ["route", "status"])
 SENT_BYTES = Counter("games_web_response_bytes_total", "Body bytes sent, by route and content encoding",
                      ["route", "encoding"])
+MEDIA = Counter("games_media_requests_total", "Media requests, by kind and the tier that answered "
+                "(hot: NVMe, origin: the drive, offline: the drive wasn't there, missing: no such file)",
+                ["kind", "tier"])
 NO_CATALOG = b'{"error": "no catalog yet: the first scan has not finished"}'
 MEDIA_CACHE = "public, max-age=604800"  # art asked for without a version
 MEDIA_IMMUTABLE = "public, max-age=31536000, immutable"
+OFFLINE = b"the drive with the manuals is offline; try again later"
 GZIP_MIN = 1024  # smaller bodies aren't worth it
+MANUAL_CACHE_BYTES = 2 * 2**30  # the manual cache's default size (MANUAL_CACHE_MB)
 
 
 @dataclass(frozen=True)
@@ -139,6 +149,7 @@ def same_tag(header: str, tag: str) -> bool:
 class Handler(BaseHTTPRequestHandler):
     data: Path
     catalog: FileCache
+    manuals: ManualCache
     # Keep-alive for Traefik's connections (art comes 120 tiles at a time);
     # an idle connection is dropped after a minute.
     protocol_version = "HTTP/1.1"
@@ -212,7 +223,11 @@ class Handler(BaseHTTPRequestHandler):
             route(self, path)
         elif m := MEDIA_PATH.match(path):
             # parse_qs drops blank values: a bare ?v= is not a versioned URL.
-            self._media(m["rel"], MEDIA_TYPES[m["art"] or m["manual"]], "v" in parse_qs(query))
+            versioned = "v" in parse_qs(query)
+            if m["manual"]:
+                self._manual(m["rel"], versioned)
+            else:
+                self._media(m["rel"], MEDIA_TYPES[m["art"]], versioned)
         else:
             self._respond(404, b"not found", "text/plain", "other")
 
@@ -236,8 +251,29 @@ class Handler(BaseHTTPRequestHandler):
         try:
             f = file.open("rb")
         except (FileNotFoundError, IsADirectoryError):
+            MEDIA.labels("art", "missing").inc()
             self._respond(404, b"not found", "text/plain", "/media")
             return
+        MEDIA.labels("art", "hot").inc()
+        self._send_file(f, content_type, versioned)
+
+    def _manual(self, rel: str, versioned: bool) -> None:
+        system, _, name = rel.partition("/manuals/")
+        try:
+            f, tier = self.manuals.open(system, name.removesuffix(".pdf"))
+        except Offline as e:
+            MEDIA.labels("manual", "offline").inc()
+            log.warning("manual not served: the drive is offline", manual=rel, error=str(e))
+            self._respond(503, OFFLINE, "text/plain", "/media", headers={"Retry-After": "300"})
+            return
+        except FileNotFoundError:
+            MEDIA.labels("manual", "missing").inc()
+            self._respond(404, b"not found", "text/plain", "/media")
+            return
+        MEDIA.labels("manual", tier).inc()
+        self._send_file(f, MEDIA_TYPES["pdf"], versioned)
+
+    def _send_file(self, f: BinaryIO, content_type: str, versioned: bool) -> None:
         with f:
             st = os.fstat(f.fileno())
             tag = f"{st.st_mtime_ns:x}-{st.st_size:x}"
@@ -261,12 +297,14 @@ ROUTES = {"/": Handler._page, "/api/catalog": Handler._catalog, "/health": Handl
           "/ready": Handler._health, "/metrics": Handler._metrics}
 
 
-def make_handler(data: Path) -> type[Handler]:
-    """A Handler class bound to one data directory, with its own catalog cache."""
-    return type("BoundHandler", (Handler,), {"data": data, "catalog": FileCache()})
+def make_handler(data: Path, lib: Path | None = None, manual_cache: int = MANUAL_CACHE_BYTES) -> type[Handler]:
+    """A Handler class bound to one data directory and library, with its own
+    catalog and manual caches."""
+    manuals = ManualCache(data / "manual-cache", lib or data / "library", manual_cache)
+    return type("BoundHandler", (Handler,), {"data": data, "catalog": FileCache(), "manuals": manuals})
 
 
-def serve(data: Path, port: int) -> None:
-    server = ThreadingHTTPServer(("", port), make_handler(data))
-    log.info("serving", port=port, data=str(data))
+def serve(data: Path, port: int, lib: Path, manual_cache: int = MANUAL_CACHE_BYTES) -> None:
+    server = ThreadingHTTPServer(("", port), make_handler(data, lib, manual_cache))
+    log.info("serving", port=port, data=str(data), library=str(lib), manual_cache_bytes=manual_cache)
     server.serve_forever()

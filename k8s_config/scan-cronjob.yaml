@@ -1,7 +1,10 @@
 # The nightly scan: reads brick2000's ROM tree (read-only, names only), fetches
-# art and facts from libretro and ratings from IGDB and RAWG, writes
-# catalog.json and the art cache. One run at a time; a run that can't reach
-# libretro still lists every game. The ratings keys come from the
+# art from libretro's thumbnail repos on GitHub and manuals from the Internet
+# Archive into the library on the drive (/extra/brick-games: outside the Samba
+# share and brick9000's ROM sync), facts from libretro and ratings from IGDB
+# and RAWG, then writes catalog.json and the art cache on the data volume.
+# One run at a time; a run that can't reach a source still lists every game
+# and the art already kept. Without the drive it fails and leaves the catalog. The ratings keys come from the
 # brick-games-ratings SealedSecret (brick-k8s-secrets); without it, no ratings.
 apiVersion: batch/v1
 kind: CronJob
@@ -32,10 +35,29 @@ spec:
           enableServiceLinks: false
           securityContext:
             runAsNonRoot: true
-            runAsUser: 65532
-            runAsGroup: 65532
+            runAsUser: 1000
+            runAsGroup: 1000
             seccompProfile:
               type: RuntimeDefault
+          initContainers:
+          # The drive is exFAT, mounted for uid 1000 only, so the app runs as 1000;
+          # until 0.7.0 it ran as 65532, and this gives the data volume's files to
+          # 1000 (a no-op once they are).
+          - name: own-data
+            image: whitepatrick/brick-games
+            imagePullPolicy: IfNotPresent
+            command: ["sh", "-c", "find /data ! -user 1000 -exec chown -h 1000:1000 {} +"]
+            volumeMounts:
+            - {name: data, mountPath: /data}
+            securityContext:
+              runAsUser: 0
+              runAsNonRoot: false
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities: {drop: ["ALL"], add: ["CHOWN", "DAC_READ_SEARCH"]}
+            resources:
+              requests: {cpu: 10m, memory: 16Mi}
+              limits: {memory: 64Mi}
           containers:
           - name: scan
             image: whitepatrick/brick-games
@@ -44,6 +66,7 @@ spec:
             env:
             - {name: ROMS_ROOT, value: /roms}
             - {name: DATA, value: /data}
+            - {name: LIBRARY, value: /library}
             - {name: LOG_FORMAT, value: json}
             - name: POD_NAME
               valueFrom: {fieldRef: {fieldPath: metadata.name}}
@@ -59,6 +82,7 @@ spec:
             volumeMounts:
             - {name: roms, mountPath: /roms, readOnly: true}
             - {name: data, mountPath: /data}
+            - {name: library, mountPath: /library}
             - {name: tmp, mountPath: /tmp}
             securityContext:
               allowPrivilegeEscalation: false
@@ -70,6 +94,8 @@ spec:
           volumes:
           - name: roms
             hostPath: {path: /extra/games/roms, type: Directory}
+          - name: library
+            hostPath: {path: /extra/brick-games, type: Directory}
           - name: data
             persistentVolumeClaim: {claimName: games-data}
           - name: tmp

@@ -1,6 +1,7 @@
-# The catalog and the art cache (~a few hundred MB). On brick2000 (local-path),
-# next to the ROMs it describes; kept if the app is deleted: the art is slow to
-# fetch again.
+# The catalog, the art cache (every picture as a small AVIF, ~150 MB) and the
+# manual cache (at most MANUAL_CACHE_MB, 2 GiB) on brick2000's NVMe
+# (local-path). The originals are in the library on the drive; all of this can
+# be rebuilt from it, but kept if the app is deleted: rebuilding takes a scan.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

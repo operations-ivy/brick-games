@@ -1,5 +1,5 @@
 """Game manuals: PDFs from the Internet Archive's per-system manual sets,
-kept in DATA/media and served from the page (brick-games#1).
+kept in the library on the drive and served from the page (brick-games#1).
 
 - Each system's `manuals` in systems.yaml names archive.org items that hold
   one PDF per game, named like the ROMs (No-Intro style; Neo Geo MVS by its
@@ -11,9 +11,15 @@ kept in DATA/media and served from the page (brick-games#1).
   name, as ratings do: names lose their punctuation, so "Phantasy Star II"
   would get "Phantasy Star II - Anne's Adventure", a different game, and a
   wrong manual is worse than the search link a game without one gets.
-- A manual is fetched once, to media/<system>/manuals/<game id>.pdf. Later
-  scans link the file on disk; the Archive is only asked when a game still
-  has no manual.
+- A manual is fetched once, to the game's library folder
+  (LIBRARY/<system>/media/<Title>/manual.pdf, library.py). Later scans link
+  the file on disk; the Archive is only asked when a game still has no
+  manual. Its URL stays /media/<system>/manuals/<game id>.pdf: the web app
+  finds the file through media.json and keeps the ones people open on NVMe
+  (cache.py).
+- Before 0.7.0 manuals were kept in DATA/media/<system>/manuals/; a scan
+  moves each one it finds there into the library ("moved"), so none is
+  downloaded again.
 - The first scan has a few GB to fetch, so a scan downloads for at most
   BUDGET seconds and the rest come on the nights after. A manual over
   MAX_BYTES, or a file that isn't a PDF, is skipped.
@@ -26,6 +32,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import threading
 import time
 import urllib.parse
@@ -49,11 +56,12 @@ VERSION_LEN = 8
 # What happened to each game's manual in one scan:
 #   ok        downloaded
 #   cached    already on disk
+#   moved     on the data volume from before 0.7.0, moved into the library
 #   deferred  matched, left for a later scan (this one's download time is up)
 #   skipped   matched, but too big or not a PDF
 #   error     the download failed (asked again next scan)
 #   none      no manual in the system's sets
-RESULTS = ("ok", "cached", "deferred", "skipped", "error", "none")
+RESULTS = ("ok", "cached", "moved", "deferred", "skipped", "error", "none")
 
 
 class Entry(NamedTuple):
@@ -96,8 +104,17 @@ def find(index: Index, name: str, short: str | None = None) -> Entry | None:
 
 
 def rel(system: dict, game_id: str) -> str:
-    """A kept manual's path under media/."""
+    """A manual's URL path under /media/ (and where 0.6 kept it under DATA/media)."""
     return f"{system['id']}/manuals/{game_id}.pdf"
+
+
+def part_path(dest: Path) -> Path:
+    """Where a manual is written before it's renamed to dest (a dotted .part beside it)."""
+    return dest.with_name(f".{dest.name}.part")
+
+
+def link(system: dict, game_id: str, path: Path) -> str:
+    return f"{rel(system, game_id)}?v={version(path)}"
 
 
 def version(path: Path) -> str:
@@ -108,10 +125,12 @@ def version(path: Path) -> str:
 
 
 class Manuals:
-    """One scan's manuals: what's on disk, the sets' indexes, the downloads."""
+    """One scan's manuals: what's on disk, the sets' indexes, the downloads.
+    legacy is DATA/media, where 0.6 kept them; each dest is the game's
+    manual.pdf in the library."""
 
-    def __init__(self, media: Path, budget: float = BUDGET) -> None:
-        self.media = media
+    def __init__(self, legacy: Path, budget: float = BUDGET) -> None:
+        self.legacy = legacy
         self.deadline = time.monotonic() + budget
         self.results = dict.fromkeys(RESULTS, 0)
         self._lock = threading.Lock()
@@ -120,10 +139,27 @@ class Manuals:
         with self._lock:
             self.results[result] += 1
 
-    def on_disk(self, system: dict, game_id: str) -> str | None:
-        """The manual's URL path (with ?v=) when it's already kept, else None."""
-        path = self.media / rel(system, game_id)
-        return f"{rel(system, game_id)}?v={version(path)}" if path.is_file() else None
+    def on_disk(self, system: dict, game_id: str, dest: Path) -> str | None:
+        """The manual's URL path (with ?v=) when it's already kept (moving a
+        0.6 copy into the library first), else None."""
+        if dest.is_file():
+            self.count("cached")
+            return link(system, game_id, dest)
+        old = self.legacy / rel(system, game_id)
+        if not old.is_file():
+            return None
+        tmp = part_path(dest)
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(old, tmp)
+            tmp.replace(dest)
+            old.unlink()
+        except OSError as e:  # left where it was; tried again next scan
+            tmp.unlink(missing_ok=True)
+            log.warning("manual not moved", system=system["id"], file=str(old), error=str(e))
+            return None
+        self.count("moved")
+        return link(system, game_id, dest)
 
     def index(self, system: dict) -> Index:
         """Every manual in the system's sets; {} when there are none or the
@@ -138,14 +174,13 @@ class Manuals:
                             error=f"{type(e).__name__}: {e}")
         return index
 
-    def fetch(self, system: dict, game_id: str, entry: Entry) -> str | None:
-        """Download one manual (once); its URL path, or None. Never raises."""
+    def fetch(self, system: dict, game_id: str, entry: Entry, dest: Path) -> str | None:
+        """Download one manual (once) to dest; its URL path, or None. Never raises."""
         if time.monotonic() > self.deadline:
             self.count("deferred")
             return None
-        dest = self.media / rel(system, game_id)
         item, name = entry
-        tmp = dest.with_suffix(".part")
+        tmp = part_path(dest)
         try:
             dest.parent.mkdir(parents=True, exist_ok=True)
             url = f"{DOWNLOAD}{urllib.parse.quote(item)}/{urllib.parse.quote(name)}"
@@ -173,4 +208,4 @@ class Manuals:
                         error=f"{type(e).__name__}: {e}")
             return None
         self.count("ok")
-        return f"{rel(system, game_id)}?v={version(dest)}"
+        return link(system, game_id, dest)

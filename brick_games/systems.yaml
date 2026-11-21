@@ -10,6 +10,9 @@
 #   manuals:  Internet Archive items with one PDF manual per game (manuals.py);
 #             none found for DS (names run together), Game Gear, PC Engine CD
 #             or arcade
+#   fetch:    false: no new art downloads into the library for this system;
+#             the art already kept is still listed (arcade, 2026-11-21: its
+#             full fill is brick-games#22)
 #   exts:     the game files (anything else in the folder is ignored:
 #             .dat, .txt, saves, artwork, per-track .bin of a .cue game)
 #   devices:  device id -> good (full speed) | ok (most games; some slow or
@@ -211,6 +214,7 @@ systems:
     folders: [fba, fba-retroid]
     libretro: "FBNeo - Arcade Games"
     igdb: [52]
+    fetch: false
     exts: [zip]
     arcade: true
     devices: {brick9000: good, rp2plus: good, rg476h: good}
