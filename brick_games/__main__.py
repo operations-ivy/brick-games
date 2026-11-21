@@ -6,7 +6,8 @@
                 the scan writes it, the web app only reads it
     MANUAL_CACHE_MB
                 web: the manual cache's size (cache.py; default 2048)
-    PORT        web: the page and /metrics (default 8080)
+    PORT        web: the page and /metrics (default 8080); saves: 8081
+    KAFKA       saves: the Kafka bootstrap servers (saves.py); unset, events stay in memory
     GITHUB_TOKEN
                 scan, optional: lifts GitHub's rate limits for the art
 """
@@ -46,11 +47,16 @@ def publish(run, stats) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="python -m brick_games")
-    parser.add_argument("mode", choices=("web", "scan"))
+    parser.add_argument("mode", choices=("web", "scan", "saves"))
     mode = parser.parse_args(argv).mode
     brick_observe.init(f"brick-games-{mode}")
     data = Path(os.environ.get("DATA", "/data"))
     lib = Path(os.environ.get("LIBRARY", "/library"))
+    if mode == "saves":
+        from . import saves_web
+
+        saves_web.main()
+        return
     if mode == "web":
         from . import web
 

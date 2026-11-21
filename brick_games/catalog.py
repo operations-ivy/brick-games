@@ -438,7 +438,7 @@ def scan(root: Path, data: Path, lib: Path, stats: Stats | None = None, rater: r
                             data / "sources")
         games += found
         if found:
-            systems.append({k: system[k] for k in ("id", "name", "devices")}
+            systems.append({k: system[k] for k in ("id", "name", "devices", "exts")}
                            | {"count": len(found), "guides": bool(system.get("wikidata"))})
     walkthroughs.add(games, {s["id"]: s for s in config["systems"]})
     stats.strategy = dict(walkthroughs.results)

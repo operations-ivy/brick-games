@@ -3,6 +3,7 @@ kind: PodMonitor
 metadata: {name: brick-games, namespace: games}
 spec:
   selector:
-    matchLabels: {app: brick-games-web}
+    matchExpressions:
+    - {key: app, operator: In, values: [brick-games-web, brick-games-saves]}
   podMetricsEndpoints:
   - {port: http, path: /metrics, interval: 30s}

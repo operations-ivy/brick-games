@@ -1,0 +1,80 @@
+# The save sync (saves.py, saves_web.py): the referee and the API behind
+# games.brick.nozdormu.cloud/api/saves. One replica (one referee), on
+# brick2000: the saves live in the library on the drive (/extra/brick-games,
+# outside the Samba share and brick9000's ROM sync), the catalog is read from
+# the data volume. Runs as 1000: the drive is exFAT, mounted for 1000 only.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: brick-games-saves
+  namespace: games
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: brick-games-saves}
+  template:
+    metadata:
+      labels: {app: brick-games-saves}
+    spec:
+      nodeSelector:
+        chuck.io/storage-node: "true"
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+      - name: saves
+        image: whitepatrick/brick-games
+        imagePullPolicy: IfNotPresent
+        args: ["saves"]
+        ports:
+        - {name: http, containerPort: 8081}
+        env:
+        - {name: DATA, value: /data}
+        - {name: LIBRARY, value: /library}
+        - {name: PORT, value: "8081"}
+        - {name: KAFKA, value: "brick-games-kafka-0.brick-games-kafka.games.svc.cluster.local:9092"}
+        - {name: LOG_FORMAT, value: json}
+        - name: POD_NAME
+          valueFrom: {fieldRef: {fieldPath: metadata.name}}
+        - name: POD_NAMESPACE
+          valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+        - name: NODE_NAME
+          valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
+        - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector-opentelemetry-collector.monitoring.svc.cluster.local:4317"}
+        volumeMounts:
+        - {name: data, mountPath: /data, readOnly: true}
+        - {name: library, mountPath: /library}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities: {drop: ["ALL"]}
+        resources:
+          requests: {cpu: 20m, memory: 64Mi}
+          limits: {cpu: 500m, memory: 256Mi}
+        livenessProbe:
+          httpGet: {path: /health, port: http}
+          initialDelaySeconds: 30
+          periodSeconds: 20
+        readinessProbe:
+          httpGet: {path: /health, port: http}
+          periodSeconds: 10
+      volumes:
+      - name: data
+        persistentVolumeClaim: {claimName: games-data}
+      - name: library
+        hostPath: {path: /extra/brick-games, type: Directory}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: brick-games-saves
+  namespace: games
+spec:
+  selector: {app: brick-games-saves}
+  ports:
+  - {name: http, port: 80, targetPort: http}

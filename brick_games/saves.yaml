@@ -1,0 +1,47 @@
+# Where each device keeps its saves, for the save agent (saves_agent.py, which
+# asks the saves service for its device's part: /api/saves/config?device=).
+#
+#   roots:  folders to look in for saves
+#     path:      the folder (~ is the agent's home on brick9000)
+#     match:     file name patterns (fnmatch), e.g. "*.srm"
+#     recursive: also look in subfolders (RetroArch's per-core folders)
+#     system:    the system every save here belongs to; without it, a save
+#                is matched to a game across all systems by its name
+#     strip:     a suffix the emulator adds to the game's name ("_1": card 1)
+#     write:     how a new save is named here, from the ROM's stem: only the
+#                first root with `write` for a save's kind gets new saves
+#     kind:      sram (battery saves) or ps1 (memory cards); default: both
+#   roms:   folders whose ROM names a new save takes (a device's names can
+#           differ from brick2000's); without it, the catalog's names
+#
+# Checked 2026-11-21: brick9000 (RetroArch, sort_savefiles off: one flat
+# folder; PCSX-ReARMed's PS1 cards are .srm there too) and the Retroid
+# (RetroArch saves in RetroArch/saves, a few older ones beside the ROMs on
+# the SD card; DuckStation cards per game). The RG476H's are from its notes
+# (homelab-context docs/rg476h.md) until it's plugged in.
+
+devices:
+  brick9000:
+    name: brick9000
+    roots:
+      - {path: "~/games/saves", match: ["*.srm"], write: "{stem}.srm"}
+    roms:
+      - "~/games/roms"
+  rp2plus:
+    name: Retroid Pocket 2+
+    roots:
+      - {path: "/storage/emulated/0/RetroArch/saves", match: ["*.srm"], recursive: true, kind: sram,
+         write: "{stem}.srm"}
+      - {path: "/storage/FA06-BE3E/RetroidPocketGames/ROMs", match: ["*.srm"], recursive: true, kind: sram}
+      - {path: "/storage/emulated/0/duckstation/memcards", match: ["*_1.mcd"], system: psx, strip: "_1",
+         kind: ps1, write: "{stem}_1.mcd"}
+    roms:
+      - "/storage/FA06-BE3E/RetroidPocketGames/ROMs"
+  rg476h:
+    name: RG476H
+    roots:
+      - {path: "/sdcard/RetroArch/saves", match: ["*.srm"], recursive: true, kind: sram, write: "{stem}.srm"}
+      - {path: "/sdcard/duckstation/memcards", match: ["*_1.mcd"], system: psx, strip: "_1", kind: ps1,
+         write: "{stem}_1.mcd"}
+    roms:
+      - "/sdcard/ROMs"

@@ -114,6 +114,37 @@ devices play each system (brick-k8s-config#108).
   an AI session: `/api/guides?q=<title>`, `/api/guides/<id>`,
   `/api/guides/<id>/text` and `/api/guides/<id>/search?q=<words>` (the
   `game-guide` skill in homelab-context).
+- **Save sync** (brick-games#19, the user, 2026-11-21): brick9000, the
+  Retroid and the RG476H share their saves (`saves.py`). Battery saves
+  (RetroArch `.srm`) and PlayStation memory cards (DuckStation's
+  `<game>_1.mcd`, PCSX-ReARMed's `.srm`: both a raw 128 KiB card) sync;
+  save states never do (they're tied to a core's version).
+  - **The agent** (`saves_agent.py`, standard library only) runs on each
+    device: brick9000's `brick-saves.timer` every 10 minutes
+    (brick-cicd-config), a handheld from the laptop over adb when it's
+    plugged in (`python3 brick_games/saves_agent.py --device rp2plus --adb
+    <serial>`). Where each device keeps its saves is `saves.yaml`. It
+    matches a save to a game by name, uploads a changed one with the
+    version it started from, and writes the current version only over a
+    save the device hasn't changed since its last sync.
+  - **Kafka decides, the user picks:** every upload is an event on
+    `saves.events` (one KRaft broker, `kafka.yaml`), keyed by game, so one
+    referee decides each game's events in order. A first save becomes
+    current; one that started from the current version moves it forward.
+    When devices have different saves, the user picks which to keep in the
+    game's details (the user: "present me with which version to keep"):
+    until then the current version stays and no device is overwritten. The
+    header shows how many games wait for a pick. No version is ever deleted.
+  - **Stored** in the library: `/extra/brick-games/<system>/saves/<Title>/`
+    (`state.json`, and `history/` with every version by its SHA-256);
+    outside the Samba share and brick9000's ROM sync. The topic is kept for
+    good, a second record.
+  - **The page:** each game's details show its saves: each device's copy
+    (in sync, behind, in conflict), the history with downloads, and the
+    pick when there's a conflict. The API is `/api/saves` (saves_web.py),
+    LAN only and without a login, like the page.
+  - Metrics: `games_saves_events_total{type,outcome}`, `games_saves_conflicts`,
+    `games_saves_games`, `games_saves_last_sync_timestamp_seconds{device}`.
 - **The game details** close with CLOSE, Escape, or a click outside them.
 
 A scan that can't reach a source still lists every game and the art and
