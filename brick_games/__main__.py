@@ -37,6 +37,11 @@ def publish(run, stats) -> None:
         run.gauge("games_manual_fetches", "Games' manuals in the run, by result", value, {"result": result})
     for result, value in stats.guides.items():
         run.gauge("games_guide_fetches", "Systems' guide lists in the run, by result", value, {"result": result})
+    for result, value in stats.strategy.items():
+        run.gauge("games_strategy_guides", "Games ranked 80+ and their local guide in the run, by result", value,
+                  {"result": result})
+    for grade, value in stats.grades.items():
+        run.gauge("games_guide_grades", "Games with a local guide, by its grade", value, {"grade": grade})
 
 
 def main(argv: list[str] | None = None) -> None:
