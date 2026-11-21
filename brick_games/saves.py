@@ -171,13 +171,30 @@ class KafkaLog:
 
         self.servers = servers
         admin = AdminClient({"bootstrap.servers": servers})
-        if TOPIC not in admin.list_topics(timeout=30).topics:
+        topics = self._wait_for_kafka(admin)
+        if TOPIC not in topics:
             futures = admin.create_topics([NewTopic(TOPIC, num_partitions=3, replication_factor=1,
                                                     config={"retention.ms": "-1", "retention.bytes": "-1"})])
             for future in futures.values():
                 future.result(30)
             log.info("topic created", topic=TOPIC)
         self.producer = Producer({"bootstrap.servers": servers, "acks": "all", "enable.idempotence": True})
+
+    @staticmethod
+    def _wait_for_kafka(admin, attempts: int = 60, pause: float = 5) -> dict:
+        """The broker's topics, once it answers: on a cold start the saves pod
+        can be up before the broker's name resolves."""
+        from confluent_kafka import KafkaException
+
+        for attempt in range(1, attempts + 1):
+            try:
+                return admin.list_topics(timeout=10).topics
+            except KafkaException as e:
+                if attempt == attempts:
+                    raise
+                log.info("waiting for kafka", attempt=attempt, error=str(e))
+                time.sleep(pause)
+        raise AssertionError("unreachable")
 
     def produce(self, key: str, event: dict[str, Any]) -> None:
         self.producer.produce(TOPIC, key=key.encode(), value=json.dumps(event).encode())

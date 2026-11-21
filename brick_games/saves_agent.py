@@ -179,7 +179,7 @@ def find_saves(fs, cfg: dict, games: Games, roms: dict[str, str] | None = None) 
             if root.get("strip") and stem.endswith(root["strip"]):
                 stem = stem[: -len(root["strip"])]
             game_id = games.match(stem, root.get("system"), on_device)
-            if game_id is None:
+            if game_id is None or games.by_id[game_id]["system"] in cfg.get("skip", []):
                 continue
             kind = kind_of(games.by_id[game_id]["system"])
             if root.get("kind", kind) != kind or (kind == "ps1" and size != PS1_CARD):
@@ -202,10 +202,17 @@ def rom_stems(fs, cfg: dict, games: Games) -> dict[str, str]:
 
 
 def new_path(fs, cfg: dict, game: dict, stem: str) -> str | None:
+    """Where a new save for the game goes on this device: the first root that
+    writes its kind. `write` is one name for every system, or one per system
+    (RetroArch sorting saves into a folder per core): a system it doesn't
+    name gets no new saves there."""
     kind = kind_of(game["system"])
     for root in cfg["roots"]:
-        if root.get("write") and root.get("kind", kind) == kind and root.get("system", game["system"]) == game["system"]:
-            return fs.join(root["path"], root["write"].format(stem=stem))
+        write = root.get("write")
+        if isinstance(write, dict):
+            write = write.get(game["system"])
+        if write and root.get("kind", kind) == kind and root.get("system", game["system"]) == game["system"]:
+            return fs.join(root["path"], write.format(stem=stem))
     return None
 
 
@@ -245,7 +252,7 @@ def sync(server: Server, fs, device: str, state_file: Path, dry_run: bool = Fals
     for entry in summary:
         game_id, head = entry["game"], entry["head"]
         game = games.by_id.get(game_id)
-        if game is None or head is None:
+        if game is None or head is None or game["system"] in cfg.get("skip", []):
             continue
         if entry["conflict"]:
             done["conflicts"] += 1

@@ -174,3 +174,16 @@ def test_a_name_two_systems_share_goes_by_the_rom_on_the_device():
     games = saves_agent.Games(cat)
     assert games.match("Breath of Fire II") is None  # two systems: no guess
     assert games.match("Breath of Fire II", on_device={"s" * 16}) == "s" * 16
+
+
+def test_new_saves_go_in_the_systems_core_folder_and_skipped_systems_stay_out(tmp_path):
+    fs = saves_agent.Local()
+    cfg = {"roots": [{"path": str(tmp_path / "saves"), "kind": "sram",
+                      "write": {"snes": "Snes9x/{stem}.srm", "gba": "mGBA/{stem}.srm"}}], "skip": ["dreamcast"]}
+    snes = {"system": "snes"}
+    assert saves_agent.new_path(fs, cfg, snes, "Super Metroid (USA)") == str(tmp_path / "saves" / "Snes9x" / "Super Metroid (USA).srm")
+    assert saves_agent.new_path(fs, cfg, {"system": "nes"}, "Zelda") is None  # a core it doesn't name: no new save
+    cat = {"games": [{"id": "d" * 16, "system": "dreamcast", "title": "Marvel vs. Capcom",
+                      "files": ["Dreamcast/Marvel vs. Capcom.chd"]}]}
+    put(tmp_path / "saves" / "Marvel vs. Capcom.srm", b"vmu")
+    assert saves_agent.find_saves(fs, cfg, saves_agent.Games(cat)) == {}

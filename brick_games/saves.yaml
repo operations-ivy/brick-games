@@ -9,8 +9,12 @@
 #                is matched to a game across all systems by its name
 #     strip:     a suffix the emulator adds to the game's name ("_1": card 1)
 #     write:     how a new save is named here, from the ROM's stem: only the
-#                first root with `write` for a save's kind gets new saves
+#                first root with `write` for a save's kind gets new saves; a
+#                map of system -> name where RetroArch keeps a folder per core
+#                (a system it doesn't name gets no new saves)
 #     kind:      sram (battery saves) or ps1 (memory cards); default: both
+#   skip:   systems this device doesn't sync (Dreamcast until every device
+#           plays it in Flycast: brick-games#20)
 #   roms:   folders whose ROM names a new save takes (a device's names can
 #           differ from brick2000's); without it, the catalog's names
 #
@@ -25,16 +29,34 @@ devices:
     name: brick9000
     roots:
       - {path: "~/games/saves", match: ["*.srm"], write: "{stem}.srm"}
+    skip: [dreamcast]
     roms:
       - "~/games/roms"
   rp2plus:
     name: Retroid Pocket 2+
     roots:
-      - {path: "/storage/emulated/0/RetroArch/saves", match: ["*.srm"], recursive: true, kind: sram,
-         write: "{stem}.srm"}
+      # RetroArch sorts saves into a folder per core (checked 2026-11-21); the
+      # .srm files at the top are from before.
+      - path: "/storage/emulated/0/RetroArch/saves"
+        match: ["*.srm"]
+        recursive: true
+        kind: sram
+        write:
+          nes: "FCEUmm/{stem}.srm"
+          snes: "Snes9x/{stem}.srm"
+          gb: "Gambatte/{stem}.srm"
+          gba: "mGBA/{stem}.srm"
+          n64: "Mupen64Plus-Next/{stem}.srm"
+          megadrive: "Genesis Plus GX/{stem}.srm"
+          segacd: "Genesis Plus GX/{stem}.srm"
+          sega32x: "PicoDrive/{stem}.srm"
+          pce: "Beetle PCE Fast/{stem}.srm"
+          neogeo: "FinalBurn Neo/{stem}.srm"
+          arcade: "FinalBurn Neo/{stem}.srm"
       - {path: "/storage/FA06-BE3E/RetroidPocketGames/ROMs", match: ["*.srm"], recursive: true, kind: sram}
       - {path: "/storage/emulated/0/duckstation/memcards", match: ["*_1.mcd"], system: psx, strip: "_1",
          kind: ps1, write: "{stem}_1.mcd"}
+    skip: [dreamcast]
     roms:
       - "/storage/FA06-BE3E/RetroidPocketGames/ROMs"
   rg476h:
@@ -43,5 +65,6 @@ devices:
       - {path: "/sdcard/RetroArch/saves", match: ["*.srm"], recursive: true, kind: sram, write: "{stem}.srm"}
       - {path: "/sdcard/duckstation/memcards", match: ["*_1.mcd"], system: psx, strip: "_1", kind: ps1,
          write: "{stem}_1.mcd"}
+    skip: [dreamcast]
     roms:
       - "/sdcard/ROMs"
