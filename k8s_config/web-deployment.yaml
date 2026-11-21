@@ -1,5 +1,10 @@
-# The page: serves catalog.json and the art cache, read-only. On brick2000 with
-# the data volume (local-path, one node).
+# The page: serves catalog.json, the art cache and the manuals. On brick2000
+# with the data volume (local-path, one node). Art comes only from the data
+# volume (NVMe); manuals from its manual cache, copied in from the library on
+# the drive the first time one is opened (cache.py). The drive is mounted
+# read-only at its root with HostToContainer, so a remount (the drive
+# unplugged and back) shows up without a restart; while it's away, art and
+# cached manuals still work and the rest answer 503.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -20,9 +25,28 @@ spec:
       enableServiceLinks: false
       securityContext:
         runAsNonRoot: true
-        runAsUser: 65532
-        runAsGroup: 65532
+        runAsUser: 1000
+        runAsGroup: 1000
         seccompProfile: {type: RuntimeDefault}
+      initContainers:
+      # The drive is exFAT, mounted for uid 1000 only, so the app runs as 1000;
+      # until 0.7.0 it ran as 65532, and this gives the data volume's files to
+      # 1000 (a no-op once they are).
+      - name: own-data
+        image: whitepatrick/brick-games
+        imagePullPolicy: IfNotPresent
+        command: ["sh", "-c", "find /data ! -user 1000 -exec chown -h 1000:1000 {} +"]
+        volumeMounts:
+        - {name: data, mountPath: /data}
+        securityContext:
+          runAsUser: 0
+          runAsNonRoot: false
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities: {drop: ["ALL"], add: ["CHOWN", "DAC_READ_SEARCH"]}
+        resources:
+          requests: {cpu: 10m, memory: 16Mi}
+          limits: {memory: 64Mi}
       containers:
       - name: web
         image: whitepatrick/brick-games
@@ -32,6 +56,8 @@ spec:
         - {name: http, containerPort: 8080}
         env:
         - {name: DATA, value: /data}
+        - {name: LIBRARY, value: /drive/brick-games}
+        - {name: MANUAL_CACHE_MB, value: "2048"}
         - {name: LOG_FORMAT, value: json}
         - name: POD_NAME
           valueFrom: {fieldRef: {fieldPath: metadata.name}}
@@ -41,7 +67,8 @@ spec:
           valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
         - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector-opentelemetry-collector.monitoring.svc.cluster.local:4317"}
         volumeMounts:
-        - {name: data, mountPath: /data, readOnly: true}
+        - {name: data, mountPath: /data}
+        - {name: drive, mountPath: /drive, readOnly: true, mountPropagation: HostToContainer}
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true
@@ -58,6 +85,8 @@ spec:
       volumes:
       - name: data
         persistentVolumeClaim: {claimName: games-data}
+      - name: drive
+        hostPath: {path: /extra, type: Directory}
 ---
 apiVersion: v1
 kind: Service

@@ -1,8 +1,14 @@
 """brick-games: `python -m brick_games web|scan`.
 
-    ROMS_ROOT   the ROM tree, read-only (default /roms)
-    DATA        the catalog and the art cache (default /data)
+    ROMS_ROOT   scan: the ROM tree, read-only (default /roms)
+    DATA        the catalog, the art cache and the manual cache, on NVMe (default /data)
+    LIBRARY     the media library on the drive (library.py; default /library):
+                the scan writes it, the web app only reads it
+    MANUAL_CACHE_MB
+                web: the manual cache's size (cache.py; default 2048)
     PORT        web: the page and /metrics (default 8080)
+    GITHUB_TOKEN
+                scan, optional: lifts GitHub's rate limits for the art
 """
 
 from __future__ import annotations
@@ -42,13 +48,15 @@ def main(argv: list[str] | None = None) -> None:
     if mode == "web":
         from . import web
 
-        web.serve(data, int(os.environ.get("PORT", "8080")))
+        web.serve(data, int(os.environ.get("PORT", "8080")), Path(os.environ.get("LIBRARY", "/library")),
+                  int(os.environ.get("MANUAL_CACHE_MB", "2048")) * 2**20)
         return
     from . import catalog
 
     stats = catalog.Stats()
     with brick_observe.job("brick-games-scan") as run:  # pushed to the Pushgateway on exit
-        catalog.scan(Path(os.environ.get("ROMS_ROOT", "/roms")), data, stats)
+        catalog.scan(Path(os.environ.get("ROMS_ROOT", "/roms")), data, Path(os.environ.get("LIBRARY", "/library")),
+                     stats)
         publish(run, stats)
 
 

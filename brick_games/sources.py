@@ -1,8 +1,13 @@
 """Where the art and the facts come from, and how a file name finds them.
 
-- Art: libretro's thumbnails (thumbnails.libretro.com/<system>/Named_Boxarts,
-  Named_Titles, Named_Snaps). Shared art is stored as a small text file naming
-  the real image; `fetch` follows it.
+- Art: libretro's thumbnails, from their GitHub repos
+  (github.com/libretro-thumbnails/<System_Name>: Named_Boxarts, Named_Titles,
+  Named_Snaps). thumbnails.libretro.com served an empty index from 2026-11-20,
+  and the repos are what it is built from. A repo's file list is one git-tree
+  call (per folder when the whole tree is too big, as FBNeo's is), revalidated
+  with its ETag: GitHub doesn't count a 304 against the 60 calls an hour it
+  allows without a token. Shared art is a git symlink, which the raw URL
+  serves as a line naming the real picture; `fetch_thumb` follows it.
 - Facts: libretro-database's metadat (clrmamepro dats per field: genre,
   releaseyear, developer, publisher, maxusers), keyed by game name.
 - Arcade zips are named by short name (sf2.zip): FinalBurn Neo's own dat
@@ -16,13 +21,21 @@ as digits. `loose` then tries a prefix match for long enough names, so
 
 from __future__ import annotations
 
+import hashlib
 import html
+import json
+import os
+import posixpath
 import re
+import urllib.error
 import urllib.parse
 import urllib.request
 from collections import defaultdict
+from pathlib import Path
 
-THUMBS = "https://thumbnails.libretro.com/"
+THUMBS_API = "https://api.github.com/repos/libretro-thumbnails/"
+THUMBS_RAW = "https://raw.githubusercontent.com/libretro-thumbnails/"
+BRANCH = "master"
 METADAT = "https://raw.githubusercontent.com/libretro/libretro-database/master/metadat/"
 FBNEO_DAT = ("https://raw.githubusercontent.com/libretro/FBNeo/master/dats/"
              "FinalBurn%20Neo%20(ClrMame%20Pro%20XML%2C%20Arcade%20only).dat")
@@ -74,37 +87,116 @@ def lookup(index: dict[str, list[str]], name: str) -> list[str] | None:
     return index.get(key) or loose(index, key)
 
 
+class RateLimited(OSError):
+    """GitHub said 429 (or 403 for its rate limit): stop asking until the next scan."""
+
+
+def headers(extra: dict[str, str] | None = None) -> dict[str, str]:
+    """GITHUB_TOKEN, when set, lifts GitHub's limits; nothing needs it."""
+    h = {"User-Agent": "brick-games"} | (extra or {})
+    if token := os.environ.get("GITHUB_TOKEN"):
+        h["Authorization"] = f"Bearer {token}"
+    return h
+
+
 def get(url: str) -> bytes:
-    request = urllib.request.Request(url, headers={"User-Agent": "brick-games"})
-    with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
-        return response.read()
+    hdrs = headers() if url.startswith((THUMBS_API, THUMBS_RAW)) else {"User-Agent": "brick-games"}
+    request = urllib.request.Request(url, headers=hdrs)
+    try:
+        with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+            return response.read()
+    except urllib.error.HTTPError as e:
+        if e.code == 429 or (e.code == 403 and e.headers.get("X-RateLimit-Remaining") == "0"):
+            raise RateLimited(f"rate limited: {url}") from e
+        raise
 
 
-def thumb_url(system: str, kind: str, name: str = "") -> str:
-    return f"{THUMBS}{urllib.parse.quote(system)}/{kind}/{urllib.parse.quote(name)}"
+def repo(system: str) -> str:
+    """libretro's system name as its thumbnails repo is named."""
+    return system.replace(" ", "_")
 
 
-def thumb_index(system: str, kind: str) -> dict[str, list[str]]:
-    """norm(name) -> thumbnail file names, from the server's directory listing."""
-    page = get(thumb_url(system, kind)).decode("utf-8", "replace")
-    index: dict[str, list[str]] = defaultdict(list)
-    for href in re.findall(r'href="([^"/]+\.png)"', page):
-        name = html.unescape(urllib.parse.unquote(href))
-        index[norm(name)].append(name)
-    return index
+def thumb_url(system: str, path: str) -> str:
+    """The raw URL of one file in a system's repo (path: Named_Boxarts/<name>.png)."""
+    return f"{THUMBS_RAW}{repo(system)}/{BRANCH}/{urllib.parse.quote(path)}"
+
+
+def github(url: str, cache: Path | None) -> dict:
+    """A GitHub API answer, revalidated against the copy kept in cache (its
+    ETag): an unchanged one costs no rate limit and no download."""
+    kept = cache / f"{hashlib.sha1(url.encode()).hexdigest()[:16]}.json" if cache else None
+    old = None
+    if kept and kept.is_file():
+        try:
+            old = json.loads(kept.read_text())
+        except ValueError:
+            old = None
+    extra = {"Accept": "application/vnd.github+json"}
+    if old and old.get("etag"):
+        extra["If-None-Match"] = old["etag"]
+    request = urllib.request.Request(url, headers=headers(extra))
+    try:
+        with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+            body, etag = json.loads(response.read()), response.headers.get("ETag")
+    except urllib.error.HTTPError as e:
+        if e.code == 304 and old:
+            return old["body"]
+        if e.code == 429 or (e.code == 403 and e.headers.get("X-RateLimit-Remaining") == "0"):
+            raise RateLimited(f"rate limited: {url}") from e
+        raise
+    if kept:
+        kept.parent.mkdir(parents=True, exist_ok=True)
+        tmp = kept.with_suffix(".part")
+        tmp.write_text(json.dumps({"url": url, "etag": etag, "body": body}))
+        tmp.replace(kept)
+    return body
+
+
+def tree_files(system: str, cache: Path | None) -> list[str]:
+    """Every file's path in a system's repo (Named_Boxarts/<name>.png ...): the
+    whole tree in one call, or folder by folder when that's too big for GitHub
+    (it answers 500 or a truncated tree)."""
+    base = f"{THUMBS_API}{repo(system)}/git/trees/"
+    try:
+        tree = github(f"{base}{BRANCH}?recursive=1", cache)
+        if not tree.get("truncated"):
+            return [e["path"] for e in tree["tree"] if e["type"] == "blob"]
+    except urllib.error.HTTPError as e:  # RateLimited isn't one: it goes up
+        if e.code < 500:
+            raise
+    top = github(f"{base}{BRANCH}", cache)
+    paths = []
+    for entry in top["tree"]:
+        if entry["type"] == "tree" and entry["path"] in KIND_KEYS:
+            sub = github(f"{base}{entry['sha']}", cache)
+            paths += [f"{entry['path']}/{e['path']}" for e in sub["tree"] if e["type"] == "blob"]
+    return paths
+
+
+def thumb_indexes(system: str, cache: Path | None = None) -> dict[str, dict[str, list[str]]]:
+    """kind -> norm(name) -> thumbnail file names, for the three kinds the page shows."""
+    indexes: dict[str, dict[str, list[str]]] = {kind: defaultdict(list) for kind in KINDS}
+    for path in tree_files(system, cache):
+        kind, _, name = path.partition("/")
+        if kind in indexes and name.endswith(".png") and "/" not in name:
+            indexes[kind][norm(name)].append(name)
+    return indexes
 
 
 def fetch_thumb(system: str, kind: str, name: str) -> bytes | None:
-    """The PNG, following libretro's "pointer" files to the shared image: a
-    pointer is a small text file holding one line, the real picture's name."""
+    """The PNG, following libretro's shared-art links: a git symlink, which the
+    raw URL serves as one line, the real picture's name (relative to its folder)."""
+    path = f"{kind}/{name}"
     for _ in range(MAX_POINTER_HOPS):
-        data = get(thumb_url(system, kind, name))
+        data = get(thumb_url(system, path))
         if data.startswith(PNG):
             return data
         target = data.decode("utf-8", "replace").strip()
         if not target.endswith(".png") or "\n" in target:
             return None
-        name = target
+        path = posixpath.normpath(posixpath.join(posixpath.dirname(path), target))
+        if path.startswith("../"):
+            return None
     return None
 
 

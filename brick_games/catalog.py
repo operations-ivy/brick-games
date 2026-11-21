@@ -8,14 +8,20 @@ become one entry: the same title once tags are stripped (regions, revisions,
 formats), with the discs kept apart in `discs`. Arcade zips are grouped under
 their parent set (clones are variants of the same game).
 
-Art comes from libretro's thumbnails into MEDIA (box art, title screen,
-screenshot; downscaled, fetched once and kept), facts from libretro-database,
-ratings from IGDB and RAWG when their keys are set (ratings.py), manuals
-from the Internet Archive's manual sets into MEDIA (manuals.py), and
-strategy guide links found through Wikidata (guides.py).
-The catalog names each picture with `?v=<its content hash>`, so the page can
-cache art for a year and still see a changed picture as a new URL.
-A system whose sources can't be reached still lists its games, without art.
+Art (box art, title screen, screenshot) comes from libretro's thumbnail repos
+(sources.py), fetched once and kept as the original PNG in the game's library
+folder on the drive (LIBRARY, library.py); manuals come from the Internet
+Archive's sets into the same folder (manuals.py). Facts come from
+libretro-database, ratings from IGDB and RAWG when their keys are set
+(ratings.py), strategy guide links from Wikidata (guides.py).
+
+The page never reads the drive for art: each original is shrunk to a small
+AVIF in DATA/media (the NVMe data volume), rebuilt when the original is newer,
+and the catalog names it with `?v=<its content hash>`, so browsers cache it
+for a year and still see a changed picture as a new URL. A source that can't
+be reached only stops new downloads: the art already kept is still listed
+(on 2026-11-20 thumbnails.libretro.com went empty and the catalog lost every
+picture). The scan won't run without the drive (library.on_drive).
 The catalog is written whole, then renamed into place: the web app never reads
 half a file.
 """
@@ -35,7 +41,7 @@ import brick_observe
 import yaml
 from PIL import Image
 
-from . import guides, manuals, ratings, sources
+from . import guides, library, manuals, ratings, sources
 
 log = brick_observe.get_logger(__name__)
 SYSTEMS_FILE = Path(__file__).with_name("systems.yaml")
@@ -58,6 +64,9 @@ ART_SIZES = {
 ART_VERSION_LEN = 8
 WORKERS = 8
 MANUAL_WORKERS = 4  # the Internet Archive is shared; don't hammer it
+# Seconds of art downloading per scan: the first fill is ~15,000 pictures, so
+# what's left comes on the nights after (as manuals.BUDGET).
+ART_BUDGET = 7200
 # A failed download or a bad picture: OSError covers URLError, timeouts and PIL's
 # UnidentifiedImageError; ValueError a picture PIL can't decode.
 FETCH_ERRORS = (OSError, ValueError)
@@ -68,7 +77,10 @@ class Stats:
 
     def __init__(self) -> None:
         self.per_system: dict[str, dict[str, int]] = {}
-        self.fetches = {"ok": 0, "missing": 0, "error": 0, "converted": 0}
+        # Art per run: ok downloaded, missing no such picture, error a failed
+        # download or a bad picture, deferred left for a later run (time is up
+        # or GitHub rate limited us), built an AVIF made from a kept original.
+        self.fetches = {"ok": 0, "missing": 0, "error": 0, "deferred": 0, "built": 0}
         self.ratings: dict[str, dict[str, int]] = {}  # source -> result -> systems (ratings.RESULTS)
         self.manuals: dict[str, int] = {}  # result -> games (manuals.RESULTS)
         self.guides: dict[str, int] = {}  # result -> systems (guides.RESULTS)
@@ -171,68 +183,87 @@ def versioned(rel: str, picture: bytes) -> str:
     return f"{rel}?v={hashlib.sha256(picture).hexdigest()[:ART_VERSION_LEN]}"
 
 
-def write_art(dest: Path, picture: bytes) -> None:
+def write_file(dest: Path, body: bytes) -> None:
+    """Whole, then renamed in (a dotted .part beside it): nothing reads half a file."""
     dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_suffix(".part")
-    tmp.write_bytes(picture)
+    tmp = dest.with_name(f".{dest.name}.part")
+    tmp.write_bytes(body)
     tmp.replace(dest)
 
 
-def convert_cached_png(dest: Path, kind: str) -> bytes | None:
-    """The PNG cached before AVIF (dest as .png) converted to dest, so it isn't
-    downloaded again; None when there's none or it can't be read."""
-    old = dest.with_suffix(".png")
+class Downloads:
+    """The art downloads' allowance for one scan: ART_BUDGET seconds, and none
+    after GitHub rate limits us. Shared by the worker threads."""
+
+    def __init__(self, budget: float = ART_BUDGET) -> None:
+        self.deadline = time.monotonic() + budget
+        self.limited = False
+
+    def open(self) -> bool:
+        return not self.limited and time.monotonic() <= self.deadline
+
+
+def get_art(cache: Path, system: dict, kind: str, thumb: str | None, game_id: str, original: Path,
+            downloads: Downloads) -> tuple[str | None, str | None]:
+    """One picture: the original fetched once into the library (when there's a
+    match and downloads are open), its AVIF built into the cache when missing
+    or older than the original. (Its URL under /media/, versioned by its
+    content, or None; what happened for Stats, or None when nothing did.) Runs
+    in worker threads, so the caller does the counting."""
+    rel = f"{system['id']}/{kind}/{game_id}.{ART_FORMAT}"
+    dest = cache / rel
+    result = None
+    if thumb and not original.exists():
+        if not downloads.open():
+            result = "deferred"
+        else:
+            try:
+                data = sources.fetch_thumb(system["libretro"], kind, thumb)
+                if data:
+                    write_file(original, data)
+                    result = "ok"
+                else:
+                    result = "missing"
+            except sources.RateLimited as e:
+                if not downloads.limited:
+                    log.warning("GitHub rate limited the art downloads; the rest wait for the next scan",
+                                error=str(e))
+                downloads.limited = True
+                result = "deferred"
+            except FETCH_ERRORS as e:  # one picture; the rest go on
+                log.warning("art fetch failed", system=system["id"], kind=kind, error=str(e))
+                result = "error"
     try:
-        small = shrink(old.read_bytes(), kind)
+        built = original.stat().st_mtime
     except FileNotFoundError:
-        return None
-    except FETCH_ERRORS as e:
-        log.warning("cached art unreadable; fetching it again", file=str(old), error=str(e))
-        return None
-    write_art(dest, small)
+        built = None
+    if built is not None and (not dest.exists() or dest.stat().st_mtime < built):
+        try:
+            small = shrink(original.read_bytes(), kind)
+        except FETCH_ERRORS as e:  # a bad original: dropped, so it's fetched again
+            log.warning("kept art unreadable; fetching it again", file=str(original), error=str(e))
+            original.unlink(missing_ok=True)
+            result = "error"
+        else:
+            write_file(dest, small)
+            result = result or "built"
     try:
-        old.unlink(missing_ok=True)
-    except OSError as e:  # the AVIF is written; a stale PNG only wastes space
-        log.warning("old art not removed", file=str(old), error=str(e))
-    return small
-
-
-def get_art(media: Path, system: dict, kind: str, thumb: str, dest_name: str) -> tuple[str | None, str | None]:
-    """Fetch (once) and keep one picture: (its URL under /media/, versioned by
-    its content, or None; the fetch result for Stats or None when it was
-    already cached). Runs in worker threads, so the caller does the counting."""
-    rel = f"{system['id']}/{kind}/{dest_name}.{ART_FORMAT}"
-    dest = media / rel
-    try:
-        return versioned(rel, dest.read_bytes()), None
+        return versioned(rel, dest.read_bytes()), result
     except FileNotFoundError:
-        pass
-    if small := convert_cached_png(dest, kind):
-        return versioned(rel, small), "converted"
-    try:
-        data = sources.fetch_thumb(system["libretro"], kind, thumb)
-        if not data:
-            return None, "missing"
-        small = shrink(data, kind)
-        write_art(dest, small)
-        return versioned(rel, small), "ok"
-    except FETCH_ERRORS as e:  # one picture; the rest go on
-        log.warning("art fetch failed", system=system["id"], kind=kind, error=str(e))
-        return None, "error"
+        return None, result
 
 
-def add_manuals(games: list[dict], system: dict, shelf: manuals.Manuals) -> None:
+def add_manuals(games: list[dict], system: dict, shelf: manuals.Manuals, folders: dict[str, Path]) -> None:
     """Each game's manual (game["manual"]): kept ones from disk, new ones
     matched in the system's sets and downloaded. Never raises: matching and
     downloading fail apart, so a failed match keeps what's on disk and a
-    failed download keeps the others."""
+    failed download keeps the others. folders: game id -> its library folder."""
     jobs: list[tuple[dict, manuals.Entry]] = []
     try:
         index = None
         for game in games:
-            if rel := shelf.on_disk(system, game["id"]):
+            if rel := shelf.on_disk(system, game["id"], folders[game["id"]] / library.MANUAL_FILE):
                 game["manual"] = rel
-                shelf.count("cached")
                 continue
             if not system.get("manuals"):
                 continue
@@ -246,7 +277,8 @@ def add_manuals(games: list[dict], system: dict, shelf: manuals.Manuals) -> None
     except Exception as e:  # manuals never fail the scan (manuals.py)
         log.warning("manuals not matched", system=system["id"], error=f"{type(e).__name__}: {e}")
     with cf.ThreadPoolExecutor(MANUAL_WORKERS) as pool:
-        futures = {pool.submit(shelf.fetch, system, game["id"], entry): game for game, entry in jobs}
+        futures = {pool.submit(shelf.fetch, system, game["id"], entry, folders[game["id"]] / library.MANUAL_FILE): game
+                   for game, entry in jobs}
         for future in cf.as_completed(futures):
             try:
                 if rel := future.result():  # fetch doesn't raise; this is the last net
@@ -255,35 +287,45 @@ def add_manuals(games: list[dict], system: dict, shelf: manuals.Manuals) -> None
                 log.warning("manual not kept", system=system["id"], error=f"{type(e).__name__}: {e}")
 
 
-def scan_system(root: Path, media: Path, system: dict, fbneo: tuple[dict, dict], stats: Stats,
-                rater: ratings.Ratings, shelf: manuals.Manuals, guide: guides.Guides) -> list[dict]:
+def scan_system(root: Path, media: Path, lib: Path, system: dict, fbneo: tuple[dict, dict], stats: Stats,
+                rater: ratings.Ratings, shelf: manuals.Manuals, guide: guides.Guides, downloads: Downloads,
+                listings: Path | None = None) -> list[dict]:
     titles, parents = fbneo if system.get("arcade") else ({}, {})
     files = find_files(root, system)
     games = group(files, system, titles, parents)
+    indexes: dict[str, dict[str, list[str]]] = {}
+    if games:
+        try:
+            indexes = sources.thumb_indexes(system["libretro"], listings)
+        except OSError as e:  # no new art; the kept art is still listed
+            log.warning("thumbnails unreachable; listing the art already kept", system=system["id"], error=str(e))
     try:
-        indexes = {kind: sources.thumb_index(system["libretro"], kind) for kind in sources.KINDS}
-        facts = sources.metadata(system["libretro"])
+        facts = sources.metadata(system["libretro"]) if games else {}
     except OSError as e:
-        log.warning("sources unreachable; listing without art", system=system["id"], error=str(e))
-        indexes, facts = {}, {}
+        log.warning("facts unreachable; listing without them", system=system["id"], error=str(e))
+        facts = {}
+    folders = library.Folders(lib, system["id"])
     scored = rater.for_system(system) if games else ({}, {})  # no fetch for an empty system
     linked = guide.for_system(system) if games else {}
     jobs = []
+    where: dict[str, Path] = {}
     for game in games:
         game["id"] = slug(system["id"], game["key"])
         game["system"] = system["id"]
         game["art"] = {}
+        where[game["id"]] = folders.folder(game["id"], game["title"])
         name = game["source_name"]
         game.update(facts.get(sources.norm(name), {}))
         game.update(ratings.scores(scored, name))
         if links := ratings.match(linked, name):
             game["guides"] = links
-        for kind, index in indexes.items():
-            cands = sources.lookup(index, name)
-            if cands:
-                jobs.append((game, kind, sources.best(cands)))
+        for kind in sources.KINDS:
+            cands = sources.lookup(indexes[kind], name) if kind in indexes else None
+            jobs.append((game, kind, sources.best(cands) if cands else None))
+    folders.save()  # before any download: a folder is recorded before it holds anything
     with cf.ThreadPoolExecutor(WORKERS) as pool:
-        futures = {pool.submit(get_art, media, system, kind, thumb, game["id"]): (game, kind)
+        futures = {pool.submit(get_art, media, system, kind, thumb, game["id"],
+                               where[game["id"]] / library.ART_FILES[kind], downloads): (game, kind)
                    for game, kind, thumb in jobs}
         for future in cf.as_completed(futures):
             game, kind = futures[future]
@@ -292,7 +334,7 @@ def scan_system(root: Path, media: Path, system: dict, fbneo: tuple[dict, dict],
                 stats.fetched(result)
             if rel:
                 game["art"][sources.KIND_KEYS[kind]] = rel
-    add_manuals(games, system, shelf)
+    add_manuals(games, system, shelf, where)
     stats.per_system[system["id"]] = {"files": len(files), "games": len(games),
                                       "with_box_art": sum(1 for g in games if "box" in g["art"]),
                                       "with_rating": sum(1 for g in games if ratings.has_score(g)),
@@ -322,12 +364,20 @@ def unchanged(path: Path, catalog: dict) -> bool:
         return False
 
 
-def scan(root: Path, data: Path, stats: Stats | None = None, rater: ratings.Ratings | None = None,
-         shelf: manuals.Manuals | None = None, guide: guides.Guides | None = None) -> dict:
+class NoDrive(RuntimeError):
+    """The library isn't on the drive the ROMs are on: the scan doesn't run."""
+
+
+def scan(root: Path, data: Path, lib: Path, stats: Stats | None = None, rater: ratings.Ratings | None = None,
+         shelf: manuals.Manuals | None = None, guide: guides.Guides | None = None,
+         downloads: Downloads | None = None) -> dict:
+    if not library.on_drive(lib, root):
+        raise NoDrive(f"{lib} is missing or not on the drive {root} is on; the catalog is left as it was")
     stats = stats or Stats()
     rater = rater or ratings.Ratings(data)
     shelf = shelf or manuals.Manuals(data / "media")
     guide = guide or guides.Guides(data)
+    downloads = downloads or Downloads()
     config = load_systems()
     media = data / "media"
     media.mkdir(parents=True, exist_ok=True)
@@ -338,7 +388,8 @@ def scan(root: Path, data: Path, stats: Stats | None = None, rater: ratings.Rati
         fbneo = ({}, {})
     games, systems = [], []
     for system in config["systems"]:
-        found = scan_system(root, media, system, fbneo, stats, rater, shelf, guide)
+        found = scan_system(root, media, lib, system, fbneo, stats, rater, shelf, guide, downloads,
+                            data / "sources")
         games += found
         if found:
             systems.append({k: system[k] for k in ("id", "name", "devices")}
