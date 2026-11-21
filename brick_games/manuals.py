@@ -108,6 +108,11 @@ def rel(system: dict, game_id: str) -> str:
     return f"{system['id']}/manuals/{game_id}.pdf"
 
 
+def part_path(dest: Path) -> Path:
+    """Where a manual is written before it's renamed to dest (a dotted .part beside it)."""
+    return dest.with_name(f".{dest.name}.part")
+
+
 def link(system: dict, game_id: str, path: Path) -> str:
     return f"{rel(system, game_id)}?v={version(path)}"
 
@@ -143,7 +148,7 @@ class Manuals:
         old = self.legacy / rel(system, game_id)
         if not old.is_file():
             return None
-        tmp = dest.with_name(f".{dest.name}.part")
+        tmp = part_path(dest)
         try:
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(old, tmp)
@@ -175,7 +180,7 @@ class Manuals:
             self.count("deferred")
             return None
         item, name = entry
-        tmp = dest.with_name(f".{dest.name}.part")
+        tmp = part_path(dest)
         try:
             dest.parent.mkdir(parents=True, exist_ok=True)
             url = f"{DOWNLOAD}{urllib.parse.quote(item)}/{urllib.parse.quote(name)}"

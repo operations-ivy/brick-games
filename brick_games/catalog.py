@@ -34,6 +34,7 @@ import io
 import json
 import os
 import re
+import threading
 import time
 from pathlib import Path, PurePath
 from typing import NamedTuple
@@ -210,10 +211,70 @@ class Downloads:
 
     def __init__(self, budget: float = ART_BUDGET) -> None:
         self.deadline = time.monotonic() + budget
-        self.limited = False
+        self._limited = threading.Event()
+        self._lock = threading.Lock()
+
+    @property
+    def limited(self) -> bool:
+        return self._limited.is_set()
+
+    def limit(self) -> bool:
+        """Rate limited: no more downloads this scan. True for the first caller only (it logs)."""
+        with self._lock:
+            first = not self._limited.is_set()
+            self._limited.set()
+        return first
 
     def open(self) -> bool:
         return not self.limited and time.monotonic() <= self.deadline
+
+
+def download_original(system: dict, kind: str, thumb: str, original: Path, dest: Path,
+                      downloads: Downloads) -> str:
+    """Fetch one original into the library; what happened, for Stats."""
+    if not downloads.open():
+        return "deferred"
+    try:
+        data = sources.fetch_thumb(system["libretro"], kind, thumb)
+    except sources.RateLimited as e:
+        if downloads.limit():
+            log.warning("GitHub rate limited the art downloads; the rest wait for the next scan", error=str(e))
+        return "deferred"
+    except FETCH_ERRORS as e:  # one picture; the rest go on
+        log.warning("art fetch failed", system=system["id"], kind=kind, error=str(e))
+        return "error"
+    if not data:
+        return "missing"
+    write_file(original, data)
+    adopt(original, dest)
+    return "ok"
+
+
+def stale(original: Path, dest: Path) -> bool:
+    """There's an original, and no AVIF from it yet or one older than it."""
+    try:
+        made = original.stat().st_mtime
+    except FileNotFoundError:  # no original
+        return False
+    try:
+        return dest.stat().st_mtime < made
+    except FileNotFoundError:  # no AVIF yet
+        return True
+
+
+def build_avif(original: Path, dest: Path, kind: str) -> str | None:
+    """The AVIF made from the original when it's stale; "built", "error" (a bad
+    original, dropped so it's fetched again) or None when there was nothing to do."""
+    if not stale(original, dest):
+        return None
+    try:
+        small = shrink(original.read_bytes(), kind)
+    except FETCH_ERRORS as e:
+        log.warning("kept art unreadable; fetching it again", file=str(original), error=str(e))
+        original.unlink(missing_ok=True)
+        return "error"
+    write_file(dest, small)
+    return "built"
 
 
 def get_art(cache: Path, system: dict, kind: str, thumb: str | None, game_id: str, original: Path,
@@ -225,42 +286,10 @@ def get_art(cache: Path, system: dict, kind: str, thumb: str | None, game_id: st
     in worker threads, so the caller does the counting."""
     rel = f"{system['id']}/{kind}/{game_id}.{ART_FORMAT}"
     dest = cache / rel
-    result = None
-    if thumb and not original.exists():
-        if not downloads.open():
-            result = "deferred"
-        else:
-            try:
-                data = sources.fetch_thumb(system["libretro"], kind, thumb)
-                if data:
-                    write_file(original, data)
-                    result = "ok"
-                    adopt(original, dest)
-                else:
-                    result = "missing"
-            except sources.RateLimited as e:
-                if not downloads.limited:
-                    log.warning("GitHub rate limited the art downloads; the rest wait for the next scan",
-                                error=str(e))
-                downloads.limited = True
-                result = "deferred"
-            except FETCH_ERRORS as e:  # one picture; the rest go on
-                log.warning("art fetch failed", system=system["id"], kind=kind, error=str(e))
-                result = "error"
-    try:
-        built = original.stat().st_mtime
-    except FileNotFoundError:
-        built = None
-    if built is not None and (not dest.exists() or dest.stat().st_mtime < built):
-        try:
-            small = shrink(original.read_bytes(), kind)
-        except FETCH_ERRORS as e:  # a bad original: dropped, so it's fetched again
-            log.warning("kept art unreadable; fetching it again", file=str(original), error=str(e))
-            original.unlink(missing_ok=True)
-            result = "error"
-        else:
-            write_file(dest, small)
-            result = result or "built"
+    fetched = download_original(system, kind, thumb, original, dest, downloads) \
+        if thumb and not original.exists() else None
+    built = build_avif(original, dest, kind)
+    result = "error" if built == "error" else fetched or built
     try:
         return versioned(rel, dest.read_bytes()), result
     except FileNotFoundError:
@@ -322,24 +351,24 @@ def scan_system(root: Path, media: Path, lib: Path, system: dict, fbneo: tuple[d
     scored = rater.for_system(system) if games else ({}, {})  # no fetch for an empty system
     linked = guide.for_system(system) if games else {}
     jobs = []
-    where: dict[str, Path] = {}
+    folder_of: dict[str, Path] = {}
     for game in games:
         game["id"] = slug(system["id"], game["key"])
         game["system"] = system["id"]
         game["art"] = {}
-        where[game["id"]] = folders.folder(game["id"], game["title"])
+        folder_of[game["id"]] = folders.folder(game["id"], game["title"])
         name = game["source_name"]
         game.update(facts.get(sources.norm(name), {}))
         game.update(ratings.scores(scored, name))
         if links := ratings.match(linked, name):
             game["guides"] = links
         for kind in sources.KINDS:
-            cands = sources.lookup(indexes[kind], name) if kind in indexes else None
+            cands = sources.lookup(index, name) if (index := indexes.get(kind)) else None
             jobs.append((game, kind, sources.best(cands) if cands else None))
     folders.save()  # before any download: a folder is recorded before it holds anything
     with cf.ThreadPoolExecutor(WORKERS) as pool:
         futures = {pool.submit(get_art, media, system, kind, thumb, game["id"],
-                               where[game["id"]] / library.ART_FILES[kind], downloads): (game, kind)
+                               folder_of[game["id"]] / library.ART_FILES[kind], downloads): (game, kind)
                    for game, kind, thumb in jobs}
         for future in cf.as_completed(futures):
             game, kind = futures[future]
@@ -348,7 +377,7 @@ def scan_system(root: Path, media: Path, lib: Path, system: dict, fbneo: tuple[d
                 stats.fetched(result)
             if rel:
                 game["art"][sources.KIND_KEYS[kind]] = rel
-    add_manuals(games, system, shelf, where)
+    add_manuals(games, system, shelf, folder_of)
     stats.per_system[system["id"]] = {"files": len(files), "games": len(games),
                                       "with_box_art": sum(1 for g in games if "box" in g["art"]),
                                       "with_rating": sum(1 for g in games if ratings.has_score(g)),

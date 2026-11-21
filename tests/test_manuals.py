@@ -123,6 +123,8 @@ def test_a_manual_kept_on_the_data_volume_moves_into_the_library(shelf, dest, mo
     monkeypatch.setattr(manuals, "get", lambda url: pytest.fail("downloaded again"))
     rel = shelf.on_disk(SNES, "0123456789abcdef", dest)
     assert rel.startswith("snes/manuals/0123456789abcdef.pdf?v=")
-    assert dest.read_bytes() == b"%PDF from 0.6" and not old.exists()
+    assert dest.read_bytes() == b"%PDF from 0.6"
+    assert not old.exists()
     assert shelf.results["moved"] == 1
-    assert shelf.on_disk(SNES, "0123456789abcdef", dest) == rel and shelf.results["cached"] == 1
+    assert shelf.on_disk(SNES, "0123456789abcdef", dest) == rel
+    assert shelf.results["cached"] == 1

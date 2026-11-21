@@ -32,6 +32,7 @@ import urllib.parse
 import urllib.request
 from collections import defaultdict
 from pathlib import Path
+from typing import Any
 
 THUMBS_API = "https://api.github.com/repos/libretro-thumbnails/"
 THUMBS_RAW = "https://raw.githubusercontent.com/libretro-thumbnails/"
@@ -50,6 +51,7 @@ ROMAN = {"ii": "2", "iii": "3", "iv": "4", "v": "5", "vi": "6", "vii": "7", "vii
 REGION_PREF = (r"\bUSA\b|\(U\)|\[U\]|\(UE\)|\(JU\)|\(JUE\)", r"\bWorld\b|\(W\)", r"\bEurope\b|\(E\)")
 PNG = b"\x89PNG\r\n\x1a\n"
 TIMEOUT = 60
+USER_AGENT = "brick-games"
 
 
 def norm(name: str) -> str:
@@ -91,23 +93,27 @@ class RateLimited(OSError):
     """GitHub said 429 (or 403 for its rate limit): stop asking until the next scan."""
 
 
-def headers(extra: dict[str, str] | None = None) -> dict[str, str]:
+def github_headers(extra: dict[str, str] | None = None) -> dict[str, str]:
     """GITHUB_TOKEN, when set, lifts GitHub's limits; nothing needs it."""
-    h = {"User-Agent": "brick-games"} | (extra or {})
+    h = {"User-Agent": USER_AGENT} | (extra or {})
     if token := os.environ.get("GITHUB_TOKEN"):
         h["Authorization"] = f"Bearer {token}"
     return h
 
 
+def raise_if_rate_limited(e: urllib.error.HTTPError, url: str) -> None:
+    if e.code == 429 or (e.code == 403 and e.headers.get("X-RateLimit-Remaining") == "0"):
+        raise RateLimited(f"rate limited: {url}") from e
+
+
 def get(url: str) -> bytes:
-    hdrs = headers() if url.startswith((THUMBS_API, THUMBS_RAW)) else {"User-Agent": "brick-games"}
+    hdrs = github_headers() if url.startswith((THUMBS_API, THUMBS_RAW)) else {"User-Agent": USER_AGENT}
     request = urllib.request.Request(url, headers=hdrs)
     try:
         with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
             return response.read()
     except urllib.error.HTTPError as e:
-        if e.code == 429 or (e.code == 403 and e.headers.get("X-RateLimit-Remaining") == "0"):
-            raise RateLimited(f"rate limited: {url}") from e
+        raise_if_rate_limited(e, url)
         raise
 
 
@@ -121,28 +127,32 @@ def thumb_url(system: str, path: str) -> str:
     return f"{THUMBS_RAW}{repo(system)}/{BRANCH}/{urllib.parse.quote(path)}"
 
 
-def github(url: str, cache: Path | None) -> dict:
+def read_kept(kept: Path | None) -> dict[str, Any] | None:
+    """A kept GitHub answer ({url, etag, body}), or None when there's none or it's unreadable."""
+    try:
+        old = json.loads(kept.read_text()) if kept else None
+    except (OSError, ValueError):
+        return None
+    return old if isinstance(old, dict) and "body" in old else None
+
+
+def github(url: str, cache: Path | None = None) -> dict[str, Any]:
     """A GitHub API answer, revalidated against the copy kept in cache (its
     ETag): an unchanged one costs no rate limit and no download."""
-    kept = cache / f"{hashlib.sha1(url.encode()).hexdigest()[:16]}.json" if cache else None
-    old = None
-    if kept and kept.is_file():
-        try:
-            old = json.loads(kept.read_text())
-        except ValueError:
-            old = None
+    name = hashlib.sha1(url.encode(), usedforsecurity=False).hexdigest()[:16]
+    kept = cache / f"{name}.json" if cache else None
+    old = read_kept(kept)
     extra = {"Accept": "application/vnd.github+json"}
     if old and old.get("etag"):
         extra["If-None-Match"] = old["etag"]
-    request = urllib.request.Request(url, headers=headers(extra))
+    request = urllib.request.Request(url, headers=github_headers(extra))
     try:
         with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
             body, etag = json.loads(response.read()), response.headers.get("ETag")
     except urllib.error.HTTPError as e:
         if e.code == 304 and old:
             return old["body"]
-        if e.code == 429 or (e.code == 403 and e.headers.get("X-RateLimit-Remaining") == "0"):
-            raise RateLimited(f"rate limited: {url}") from e
+        raise_if_rate_limited(e, url)
         raise
     if kept:
         kept.parent.mkdir(parents=True, exist_ok=True)

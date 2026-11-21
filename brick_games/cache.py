@@ -17,6 +17,7 @@ bigger than the whole cache is streamed from the drive and not kept.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import threading
@@ -42,8 +43,12 @@ class Offline(OSError):
 
 
 class ManualCache:
+    """The manuals people open, kept on NVMe up to `limit` bytes (module docstring)."""
+
     def __init__(self, root: Path, lib: Path, limit: int) -> None:
-        self.root, self.lib, self.limit = root, lib, limit
+        self.root = root
+        self.lib = lib
+        self.limit = limit
         self._lock = threading.Lock()  # one copy or eviction at a time
         CACHE_LIMIT.set(limit)
         CACHE_BYTES.set(self._size())
@@ -106,11 +111,9 @@ class ManualCache:
     def _touch(self, path: Path) -> None:
         """Opened now: the access time is the LRU's clock (set by hand, since the
         volume may be mounted noatime); the mtime, the ETag's, stays."""
-        try:
-            st = path.stat()
-            os.utime(path, ns=(time.time_ns(), st.st_mtime_ns))
-        except OSError:
-            pass
+        # Best effort: a failed touch only makes this manual look older to the LRU.
+        with contextlib.suppress(OSError):
+            os.utime(path, ns=(time.time_ns(), path.stat().st_mtime_ns))
 
     def _evict(self, keep: Path) -> None:
         files = []

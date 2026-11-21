@@ -5,7 +5,6 @@ import json
 import os
 import shutil
 import threading
-import time
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
@@ -114,12 +113,7 @@ def offline(monkeypatch):
               "Named_Snaps": []}
 
     def thumb_indexes(system, cache=None):
-        indexes = {}
-        for kind, names in thumbs.items():
-            for name in names:
-                indexes.setdefault(kind, {}).setdefault(sources.norm(name), []).append(name)
-            indexes.setdefault(kind, {})
-        return indexes
+        return {kind: {sources.norm(n): [n] for n in names} for kind, names in thumbs.items()}
 
     monkeypatch.setattr(sources, "thumb_indexes", thumb_indexes)
     monkeypatch.setattr(sources, "fetch_thumb", lambda system, kind, name: png())
@@ -476,13 +470,13 @@ def test_the_manual_cache_drops_the_least_recently_opened(tmp_path):
         index[game_id] = f"Game {i}"
     (lib / "snes" / "media.json").write_text(json.dumps(index))
     shelf = cache.ManualCache(tmp_path / "manual-cache", lib, limit=250)
-    for game_id in (f"{0:016x}", f"{1:016x}"):
+    hot = tmp_path / "manual-cache" / "snes"
+    for i, game_id in enumerate((f"{0:016x}", f"{1:016x}")):
         f, tier = shelf.open("snes", game_id)
         f.close()
         assert tier == "origin"
-    time.sleep(0.01)
-    shelf.open("snes", f"{0:016x}")[0].close()  # 0 opened again: 1 is now the oldest
-    time.sleep(0.01)
+        os.utime(hot / f"{game_id}.pdf", (1_700_000_000 + i, 1_700_000_000))  # 1 opened after 0
+    shelf.open("snes", f"{0:016x}")[0].close()  # 0 opened again (now): 1 is the oldest
     shelf.open("snes", f"{2:016x}")[0].close()  # over 250 bytes: 1 goes
     kept = sorted(f.stem for f in (tmp_path / "manual-cache" / "snes").iterdir())
     assert kept == [f"{0:016x}", f"{2:016x}"]

@@ -62,6 +62,7 @@ MEDIA_CACHE = "public, max-age=604800"  # art asked for without a version
 MEDIA_IMMUTABLE = "public, max-age=31536000, immutable"
 OFFLINE = b"the drive with the manuals is offline; try again later"
 GZIP_MIN = 1024  # smaller bodies aren't worth it
+MANUAL_CACHE_BYTES = 2 * 2**30  # the manual cache's default size (MANUAL_CACHE_MB)
 
 
 @dataclass(frozen=True)
@@ -296,14 +297,14 @@ ROUTES = {"/": Handler._page, "/api/catalog": Handler._catalog, "/health": Handl
           "/ready": Handler._health, "/metrics": Handler._metrics}
 
 
-def make_handler(data: Path, lib: Path | None = None, manual_cache: int = 2 * 2**30) -> type[Handler]:
+def make_handler(data: Path, lib: Path | None = None, manual_cache: int = MANUAL_CACHE_BYTES) -> type[Handler]:
     """A Handler class bound to one data directory and library, with its own
     catalog and manual caches."""
     manuals = ManualCache(data / "manual-cache", lib or data / "library", manual_cache)
     return type("BoundHandler", (Handler,), {"data": data, "catalog": FileCache(), "manuals": manuals})
 
 
-def serve(data: Path, port: int, lib: Path, manual_cache: int) -> None:
+def serve(data: Path, port: int, lib: Path, manual_cache: int = MANUAL_CACHE_BYTES) -> None:
     server = ThreadingHTTPServer(("", port), make_handler(data, lib, manual_cache))
     log.info("serving", port=port, data=str(data), library=str(lib), manual_cache_bytes=manual_cache)
     server.serve_forever()

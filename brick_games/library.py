@@ -42,7 +42,8 @@ def safe_component(s: str, fallback: str = "untitled") -> str:
     s = unicodedata.normalize("NFC", s)
     s = re.sub(r"\s*:\s*", " - ", s)
     s = UNSAFE.sub(" ", s)
-    s = re.sub(r"\s+", " ", s).strip().lstrip(".").strip().rstrip(". ")
+    # no leading dots (a hidden file) or trailing dots and spaces (exFAT drops them)
+    s = re.sub(r"\s+", " ", s).strip().lstrip(". ").rstrip(". ")
     if len(s) > MAX_NAME:
         s = s[:MAX_NAME].rstrip(". ")
     return s or fallback
@@ -59,7 +60,9 @@ def on_drive(library: Path, roms: Path) -> bool:
 
 
 def read_index(library: Path, system_id: str) -> dict[str, str]:
-    """game id -> folder name, as the last scan left it; {} when there's none."""
+    """game id -> folder name, as the last scan left it; {} when there's none.
+    A corrupt media.json raises on purpose: starting over would give folders
+    to other games."""
     try:
         index = json.loads((library / system_id / INDEX_FILE).read_text())
     except FileNotFoundError:
@@ -81,7 +84,8 @@ class Folders:
         if (name := self.index.get(game_id)) is None:
             name = safe_component(title)
             if name.casefold() in self._taken:
-                name = f"{name[:MAX_NAME - ID_LEN - 3]} [{game_id[:ID_LEN]}]"
+                suffix = f" [{game_id[:ID_LEN]}]"
+                name = name[:MAX_NAME - len(suffix)].rstrip(". ") + suffix
             self.index[game_id] = name
             self._taken.add(name.casefold())
         return self.base / "media" / name

@@ -45,18 +45,18 @@ def main(argv: list[str] | None = None) -> None:
     mode = parser.parse_args(argv).mode
     brick_observe.init(f"brick-games-{mode}")
     data = Path(os.environ.get("DATA", "/data"))
+    lib = Path(os.environ.get("LIBRARY", "/library"))
     if mode == "web":
         from . import web
 
-        web.serve(data, int(os.environ.get("PORT", "8080")), Path(os.environ.get("LIBRARY", "/library")),
-                  int(os.environ.get("MANUAL_CACHE_MB", "2048")) * 2**20)
+        web.serve(data, int(os.environ.get("PORT", "8080")), lib=lib,
+                  manual_cache=int(os.environ.get("MANUAL_CACHE_MB", "2048")) * 2**20)
         return
     from . import catalog
 
     stats = catalog.Stats()
     with brick_observe.job("brick-games-scan") as run:  # pushed to the Pushgateway on exit
-        catalog.scan(Path(os.environ.get("ROMS_ROOT", "/roms")), data, Path(os.environ.get("LIBRARY", "/library")),
-                     stats)
+        catalog.scan(Path(os.environ.get("ROMS_ROOT", "/roms")), data, lib, stats)
         publish(run, stats)
 
 
