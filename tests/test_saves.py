@@ -200,3 +200,20 @@ def test_bad_uploads_are_refused(service, query, body, status):
     with pytest.raises(urllib.error.HTTPError) as e:
         urllib.request.urlopen(req)
     assert e.value.code == status
+
+
+def test_a_core_folder_settles_a_shared_name_and_a_new_save_never_lands_on_a_file(tmp_path):
+    fs = saves_agent.Local()
+    root = {"path": str(tmp_path / "saves"), "recursive": True, "kind": "sram",
+            "write": {"gba": "mGBA/{stem}.srm", "snes": "Snes9x/{stem}.srm", "megadrive": "Genesis Plus GX/{stem}.srm",
+                      "segacd": "Genesis Plus GX/{stem}.srm"}}
+    assert saves_agent.core_folders(root) == {"mGBA": "gba", "Snes9x": "snes"}  # Genesis Plus GX is two systems
+    cat = {"games": [{"id": "g" * 16, "system": "gba", "title": "TMNT", "files": ["gba/TMNT (USA).gba"]},
+                     {"id": "a" * 16, "system": "arcade", "title": "Teenage Mutant Ninja Turtles", "files": ["fba/tmnt.zip"]}],
+           "systems": [{"id": "gba", "exts": ["gba"]}, {"id": "arcade", "exts": ["zip"]}]}
+    games = saves_agent.Games(cat)
+    put(tmp_path / "saves" / "mGBA" / "TMNT (USA).srm", b"gba save")
+    both = {"g" * 16: "TMNT (USA)", "a" * 16: "tmnt"}  # both ROMs on the device
+    found = saves_agent.find_saves(fs, {"roots": [root]}, games, both)
+    assert list(found) == ["g" * 16]  # in mGBA/: the GBA game
+    assert fs.exists(str(tmp_path / "saves" / "mGBA" / "TMNT (USA).srm"))
