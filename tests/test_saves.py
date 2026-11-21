@@ -32,10 +32,10 @@ def test_the_referee_moves_forward_and_flags_conflicts():
     assert saves.apply(s, {"type": "kept", "sha": "nope", "at": 3}) == "unknown"
 
 
-def test_the_agents_names_match_the_scans():
-    for name in ["Legend of Zelda, The - A Link to the Past (U) [!].smc", "Final Fantasy III (USA)",
-                 "Disney's Aladdin.smc", "Vagrant Story (USA)_1"]:
-        assert saves_agent.norm(name) == sources.norm(name)
+@pytest.mark.parametrize("name", ["Legend of Zelda, The - A Link to the Past (U) [!].smc", "Final Fantasy III (USA)",
+                                  "Disney's Aladdin.smc", "Vagrant Story (USA)_1"])
+def test_the_agents_names_match_the_scans(name):
+    assert saves_agent.norm(name) == sources.norm(name)
 
 
 @pytest.fixture
@@ -187,3 +187,16 @@ def test_new_saves_go_in_the_systems_core_folder_and_skipped_systems_stay_out(tm
                       "files": ["Dreamcast/Marvel vs. Capcom.chd"]}]}
     put(tmp_path / "saves" / "Marvel vs. Capcom.srm", b"vmu")
     assert saves_agent.find_saves(fs, cfg, saves_agent.Games(cat)) == {}
+
+
+@pytest.mark.parametrize("query,body,status", [
+    ("device=rp2plus&name=x&mtime=yesterday", b"save", 400),  # mtime isn't a number
+    ("device=rp2plus&name=x", b"", 400),  # empty
+    ("device=nobody&name=x", b"save", 404),  # unknown device
+])
+def test_bad_uploads_are_refused(service, query, body, status):
+    base, _, _ = service
+    req = urllib.request.Request(f"{base}/api/saves/{GAME['id']}/upload?{query}", data=body, method="POST")
+    with pytest.raises(urllib.error.HTTPError) as e:
+        urllib.request.urlopen(req)
+    assert e.value.code == status

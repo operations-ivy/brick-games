@@ -64,7 +64,7 @@ def kind_of(system: str) -> str:
 
 
 def stem_of(name: str) -> str:
-    return name.rsplit(".", 1)[0] if "." in name else name
+    return name.rsplit(".", 1)[0]
 
 
 class Local:
@@ -75,7 +75,12 @@ class Local:
         if not base.is_dir():
             return []
         files = base.rglob("*") if recursive else base.iterdir()
-        return [(str(p), p.stat().st_size, p.stat().st_mtime) for p in files if p.is_file()]
+        out = []
+        for p in files:
+            if p.is_file():
+                st = p.stat()
+                out.append((str(p), st.st_size, st.st_mtime))
+        return out
 
     def read(self, path: str) -> bytes:
         return Path(path).read_bytes()
@@ -103,12 +108,17 @@ class Adb:
 
     def list(self, root: str, recursive: bool) -> list[tuple[str, int, float]]:
         depth = "" if recursive else "-maxdepth 1 "
-        cmd = f"[ -d {shlex.quote(root)} ] && find {shlex.quote(root)} {depth}-type f -exec stat -c '%s %Y %n' {{}} +"
-        out = subprocess.run(["adb", "-s", self.serial, "shell", cmd], capture_output=True, timeout=300).stdout
+        # A missing folder is no saves (exit 0); a dead connection or an
+        # unauthorised device is an error, never "no saves".
+        cmd = (f"[ -d {shlex.quote(root)} ] || exit 0; "
+               f"find {shlex.quote(root)} {depth}-type f -exec stat -c '%s %Y %n' {{}} +")
+        out = self._adb("shell", cmd)
         files = []
         for line in out.decode(errors="replace").splitlines():
-            size, mtime, path = line.split(" ", 2)
-            files.append((path, int(size), float(mtime)))
+            size, _, rest = line.partition(" ")
+            mtime, _, path = rest.partition(" ")
+            if size.isdigit() and path:
+                files.append((path, int(size), float(mtime)))
         return files
 
     def read(self, path: str) -> bytes:
@@ -221,7 +231,7 @@ def sync(server: Server, fs, device: str, state_file: Path, dry_run: bool = Fals
     games = Games(server.json("GET", "/api/catalog"))
     try:
         mine = json.loads(state_file.read_text())
-    except FileNotFoundError:
+    except (FileNotFoundError, json.JSONDecodeError):  # none yet, or cut short: start afresh (uploads only)
         mine = {"files": {}}
     files = mine["files"]
     done = {"uploaded": 0, "written": 0, "conflicts": 0, "same": 0}
@@ -280,7 +290,9 @@ def sync(server: Server, fs, device: str, state_file: Path, dry_run: bool = Fals
 
     if not dry_run:
         state_file.parent.mkdir(parents=True, exist_ok=True)
-        state_file.write_text(json.dumps(mine, indent=1))
+        tmp = state_file.with_name(f".{state_file.name}.part")
+        tmp.write_text(json.dumps(mine, indent=1))
+        tmp.replace(state_file)
         server.json("POST", "/api/saves/seen", b"", {"device": device})
     say(f"{device}: {done['uploaded']} uploaded, {done['written']} written, {done['same']} unchanged, "
         f"{done['conflicts']} conflicts waiting")
@@ -299,7 +311,8 @@ def main(argv: list[str] | None = None) -> int:
     fs = Adb(args.adb) if args.adb else Local()
     try:
         sync(Server(args.server), fs, args.device, state, args.dry_run)
-    except (urllib.error.URLError, subprocess.CalledProcessError) as e:
+    except (urllib.error.URLError, subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError,
+            json.JSONDecodeError) as e:
         print(f"save sync failed: {e}", file=sys.stderr)
         return 1
     return 0

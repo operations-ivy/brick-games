@@ -45,30 +45,37 @@ def publish(run, stats) -> None:
         run.gauge("games_guide_grades", "Games with a local guide, by its grade", value, {"grade": grade})
 
 
-def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(prog="python -m brick_games")
-    parser.add_argument("mode", choices=("web", "scan", "saves"))
-    mode = parser.parse_args(argv).mode
-    brick_observe.init(f"brick-games-{mode}")
-    data = Path(os.environ.get("DATA", "/data"))
-    lib = Path(os.environ.get("LIBRARY", "/library"))
-    if mode == "saves":
-        from . import saves_web
+def run_web(data: Path, lib: Path) -> None:
+    from . import web
 
-        saves_web.main()
-        return
-    if mode == "web":
-        from . import web
+    web.serve(data, int(os.environ.get("PORT", "8080")), lib=lib,
+              manual_cache=int(os.environ.get("MANUAL_CACHE_MB", "2048")) * 2**20)
 
-        web.serve(data, int(os.environ.get("PORT", "8080")), lib=lib,
-                  manual_cache=int(os.environ.get("MANUAL_CACHE_MB", "2048")) * 2**20)
-        return
+
+def run_saves(data: Path, lib: Path) -> None:
+    from . import saves_web
+
+    saves_web.serve(data, lib, int(os.environ.get("PORT", "8081")), os.environ.get("KAFKA"))
+
+
+def run_scan(data: Path, lib: Path) -> None:
     from . import catalog
 
     stats = catalog.Stats()
     with brick_observe.job("brick-games-scan") as run:  # pushed to the Pushgateway on exit
         catalog.scan(Path(os.environ.get("ROMS_ROOT", "/roms")), data, lib, stats)
         publish(run, stats)
+
+
+MODES = {"web": run_web, "scan": run_scan, "saves": run_saves}
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(prog="python -m brick_games")
+    parser.add_argument("mode", choices=sorted(MODES))
+    mode = parser.parse_args(argv).mode
+    brick_observe.init(f"brick-games-{mode}")
+    MODES[mode](Path(os.environ.get("DATA", "/data")), Path(os.environ.get("LIBRARY", "/library")))
 
 
 if __name__ == "__main__":

@@ -29,15 +29,19 @@ def test_a_file_name_finds_its_game(filename, ids):
     assert [g["id"] for g in guide_filer.candidates(filename, WANTED)] == ids
 
 
-def test_the_names_match_the_scans():
-    for name in ["Chrono Trigger - Guide - GameFAQs.txt", "The Legend of Zelda, A Link to the Past"]:
-        assert guide_filer.norm(name) == sources.norm(name)
+@pytest.mark.parametrize("name", ["Chrono Trigger - Guide - GameFAQs.txt", "The Legend of Zelda, A Link to the Past"])
+def test_the_names_match_the_scans(name):
+    assert guide_filer.norm(name) == sources.norm(name)
 
 
 def test_watching_files_a_guide_and_leaves_the_rest(tmp_path, monkeypatch):
     sent = []
-    monkeypatch.setattr(guide_filer, "upload", lambda path, game, host=None: sent.append((path.read_text(), game["id"]))
-                        or f"/extra/brick-games/{game['folder']}/guide-gamefaqs.txt")
+
+    def fake_upload(path, game, host=None):
+        sent.append((path.read_text(), game["id"]))
+        return f"/extra/brick-games/{game['folder']}/guide-gamefaqs.txt"
+
+    monkeypatch.setattr(guide_filer, "upload", fake_upload)
     (tmp_path / "Chrono Trigger - Guide and Walkthrough - GameFAQs.txt").write_text("Chrono Trigger FAQ\n=====\n")
     (tmp_path / "notes.txt").write_text("not a guide")
     (tmp_path / "Chrono Trigger page.txt").write_text("<!DOCTYPE html><html>")  # a saved page, not text

@@ -32,8 +32,10 @@ import hashlib
 import json
 import threading
 import time
+from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
 import brick_observe
 
@@ -186,15 +188,16 @@ class KafkaLog:
         can be up before the broker's name resolves."""
         from confluent_kafka import KafkaException
 
-        for attempt in range(1, attempts + 1):
+        attempt = 0
+        while True:
+            attempt += 1
             try:
                 return admin.list_topics(timeout=10).topics
             except KafkaException as e:
-                if attempt == attempts:
+                if attempt >= attempts:
                     raise
                 log.info("waiting for kafka", attempt=attempt, error=str(e))
                 time.sleep(pause)
-        raise AssertionError("unreachable")
 
     def produce(self, key: str, event: dict[str, Any]) -> None:
         self.producer.produce(TOPIC, key=key.encode(), value=json.dumps(event).encode())
@@ -227,8 +230,9 @@ class Referee:
         self.store = store
         self.games = games
         self.applied = threading.Condition()
-        self.seen: set[str] = set()  # event ids applied
-        self.outcomes: dict[str, int] = {}
+        # Event ids applied, for wait(): a few per sync, so kept for the pod's life.
+        self.seen: set[str] = set()
+        self.outcomes: Counter[str] = Counter()
 
     def handle(self, event: dict[str, Any]) -> str:
         game = self.games().get(event["game"])
@@ -242,7 +246,7 @@ class Referee:
             log.info("save event", game=game["title"], system=game["system"], type=event["type"],
                      device=event.get("device"), outcome=outcome)
         with self.applied:
-            self.outcomes[outcome] = self.outcomes.get(outcome, 0) + 1
+            self.outcomes[outcome] += 1
             self.seen.add(event["id"])
             self.applied.notify_all()
         return outcome

@@ -25,6 +25,8 @@ every game ranked 80 and up, kept as text the page and an AI session can read.
   on NVMe, which the web app serves (web.py: /api/guides). Fetched once,
   again after REFRESH days; a failed fetch keeps the old guide. A scan
   fetches for at most BUDGET seconds, a request every PAUSE seconds.
+- Each scan also writes DATA/strategy/wanted.json, the games ranked 80+
+  without a complete guide (guide_filer.py, /api/guides/wanted).
 - Never fails the scan: games_strategy_guides{result}, games_guide_grades{grade}.
 """
 
@@ -55,6 +57,7 @@ RANK_MIN = 80
 MIN_REVIEWS = PRIOR_REVIEWS = 10  # as the page's ranked() (static/index.html)
 KINDS = (("critics", "critic_reviews"), ("users", "user_reviews"))
 GRADES = {0: "stub", 1: "stub", 2: "partial", 3: "complete", 4: "complete", 5: "complete"}
+DONE = {"complete", "hand-saved"}  # grades that take a game off the wanted list
 STAGE = re.compile(r"Category:Guides at completion stage (\d)")
 GUIDE_MD, GUIDE_JSON, HAND_SAVED = "guide.md", "guide.json", "guide-gamefaqs.txt"
 REFRESH = 30 * 86400
@@ -256,7 +259,10 @@ class Strategy:
             if (meta := self.kept(game)) and meta["sections"]:  # one kept empty by 0.8.0 isn't shown
                 game["strategy"] = {"grade": meta["grade"], "sections": len(meta["sections"]), "v": meta["v"]}
                 self.grades[meta["grade"]] += 1
-        self._wanted(games, rank)
+        try:
+            self._wanted(games, rank)
+        except Exception as e:  # never fails the scan (module docstring)
+            log.warning("wanted list not written", error=f"{type(e).__name__}: {e}")
 
     def _wanted(self, games: list[dict], rank: dict[str, float]) -> None:
         """DATA/strategy/wanted.json: the games ranked 80+ without a complete
@@ -266,18 +272,16 @@ class Strategy:
         for game in games:
             score = rank.get(game["id"])
             grade = (game.get("strategy") or {}).get("grade")
-            if score is None or score < RANK_MIN or grade in ("complete", "hand-saved"):
+            if score is None or score < RANK_MIN or grade in DONE:
                 continue
-            gamefaqs = (game.get("guides") or {}).get("gamefaqs")
             folder = self.folder(game)
             wanted.append({
                 "id": game["id"], "title": game["title"], "system": game["system"], "rank": round(score, 1),
                 "grade": grade,
-                "gamefaqs": f"https://gamefaqs.gamespot.com/-/{gamefaqs}-/faqs" if gamefaqs
-                else f"https://gamefaqs.gamespot.com/search?game={urllib.parse.quote(game['title'])}",
+                "gamefaqs": gamefaqs_url(game),
                 "folder": str(folder.relative_to(self.lib)) if folder else None,
             })
-        wanted.sort(key=lambda w: -w["rank"])
+        wanted.sort(key=itemgetter("rank"), reverse=True)
         write(self.store / "wanted.json", json.dumps(wanted, ensure_ascii=False, indent=1))
 
     def _one(self, game: dict, system: dict, rank: float | None) -> None:
@@ -336,6 +340,13 @@ class Strategy:
         log.info("guide kept", game=game["title"], system=game["system"], grade=grade, sections=len(sections),
                  chars=len(md))
         return True
+
+
+def gamefaqs_url(game: dict) -> str:
+    """The game's guides on GameFAQs (its id from Wikidata), else a search for it."""
+    if slug := (game.get("guides") or {}).get("gamefaqs"):
+        return f"https://gamefaqs.gamespot.com/-/{slug}-/faqs"
+    return f"https://gamefaqs.gamespot.com/search?game={urllib.parse.quote(game['title'])}"
 
 
 def search(md: str, sections: list[Section], query: str, limit: int = 5) -> list[dict]:

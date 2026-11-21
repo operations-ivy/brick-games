@@ -32,7 +32,7 @@ import subprocess
 import sys
 import time
 import urllib.request
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 SERVER = "https://games.brick.nozdormu.cloud"
 HOST = "brick2000"
@@ -72,15 +72,12 @@ def candidates(filename: str, games: list[dict]) -> list[dict]:
     title (or contains a long one), the longest titles first; narrowed to one
     system when the file name says which."""
     key = norm(filename)
-    hits = []
-    for g in games:
-        t = norm(g["title"])
-        if t and (key.startswith(t) or (len(t) >= 8 and t in key)):
-            hits.append(g)
-    if not hits:
+    titled = [(t, g) for g in games if (t := norm(g["title"]))]
+    found = [(t, g) for t, g in titled if key.startswith(t) or (len(t) >= 8 and t in key)]
+    if not found:
         return []
-    best = max(len(norm(g["title"])) for g in hits)
-    hits = [g for g in hits if len(norm(g["title"])) == best]
+    best = max(len(t) for t, _ in found)
+    hits = [g for t, g in found if len(t) == best]
     if len(hits) > 1:
         lowered = filename.lower()
         by_system = [g for g in hits
@@ -90,17 +87,19 @@ def candidates(filename: str, games: list[dict]) -> list[dict]:
 
 
 def looks_like_text(path: Path) -> bool:
-    head = path.read_bytes()[:512].lstrip().lower()
+    with path.open("rb") as f:
+        head = f.read(512).lstrip().lower()
     return not head.startswith((b"<!doctype", b"<html")) and b"\x00" not in head
 
 
 def upload(path: Path, game: dict, host: str = HOST) -> str:
     """Copy the file to the game's library folder on brick2000; its path there."""
-    dest = f"{LIBRARY}/{game['folder']}/{HAND_SAVED}"
+    folder = PurePosixPath(LIBRARY, game["folder"])  # a path on brick2000, not here
+    dest = str(folder / HAND_SAVED)
     q = shlex.quote(dest)
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    old = shlex.quote(f"{LIBRARY}/{game['folder']}/guide-gamefaqs.{stamp}.txt")
-    script = (f"mkdir -p {shlex.quote(str(Path(dest).parent))} && "
+    old = shlex.quote(str(folder / f"guide-gamefaqs.{stamp}.txt"))
+    script = (f"mkdir -p {shlex.quote(str(folder))} && "
               f"{{ [ ! -e {q} ] || mv {q} {old}; }} && cat > {q}.part && mv {q}.part {q}")
     subprocess.run(["ssh", host, script], input=path.read_bytes(), check=True, timeout=120)
     return dest
@@ -131,13 +130,13 @@ def file_one(path: Path, games: list[dict], game: dict | None = None, done: Path
     dest = upload(path, game)
     print(f"filed   {path.name} -> {game['title']} ({game['system']}): {HOST}:{dest}")
     if done:
-        done.mkdir(exist_ok=True)
-        shutil.move(str(path), done / path.name)
+        shutil.move(path, done / path.name)
     return True
 
 
 def watch(downloads: Path, games: list[dict], once: bool) -> None:
     done = downloads / "filed"
+    done.mkdir(exist_ok=True)
     sizes: dict[Path, int] = {}
     seen: set[Path] = set()
     if not once:
@@ -153,16 +152,16 @@ def watch(downloads: Path, games: list[dict], once: bool) -> None:
             seen.add(path)
             try:
                 file_one(path, games, done=done)
-            except subprocess.CalledProcessError as e:
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
                 print(f"failed  {path.name}: {e}", file=sys.stderr)
-                seen.discard(path)
+                seen.discard(path)  # tried again next poll: brick2000 may just be away
         if once:
             return
         time.sleep(POLL)
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("file", nargs="?", type=Path, help="one saved guide to file (with --game)")
     parser.add_argument("--game", help="the game's id or exact title, for FILE")
     parser.add_argument("--wanted", action="store_true", help="list the games still wanting a guide")
@@ -178,11 +177,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\n{len(games)} games ranked 80+ without a complete guide.")
         return 0
     if args.file:
-        match = [g for g in games if args.game in (g["id"], g["title"])] if args.game else []
-        if args.game and not match:
-            print(f"no wanted game {args.game!r} (see --wanted)", file=sys.stderr)
-            return 1
-        return 0 if file_one(args.file, games, match[0] if match else None) else 1
+        game = None
+        if args.game:
+            game = next((g for g in games if args.game in (g["id"], g["title"])), None)
+            if game is None:
+                print(f"no wanted game {args.game!r} (see --wanted)", file=sys.stderr)
+                return 1
+        return 0 if file_one(args.file, games, game) else 1
     try:
         watch(args.downloads, games, args.once)
     except KeyboardInterrupt:
