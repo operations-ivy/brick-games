@@ -11,6 +11,13 @@ spec:
   - host: games.brick.nozdormu.cloud
     http:
       paths:
+      # The save sync (saves-deployment.yaml): the agents and the page's Saves.
+      - path: /api/saves
+        pathType: Prefix
+        backend:
+          service:
+            name: brick-games-saves
+            port: {number: 80}
       - path: /
         pathType: Prefix
         backend:

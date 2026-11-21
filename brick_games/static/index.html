@@ -103,11 +103,22 @@
   .reader input { font: 14px var(--mono); background: var(--void); color: var(--text); border: 1px solid var(--edge);
                   border-radius: 6px; padding: 6px 8px; width: 100%; box-sizing: border-box; margin-bottom: 8px; }
   .reader .src { font: 12px var(--mono); color: var(--dim); }
+  .saves { font: 13px var(--mono); }
+  .saves table { border-collapse: collapse; width: 100%; margin: 4px 0; }
+  .saves td { padding: 3px 8px 3px 0; vertical-align: top; }
+  .saves .ok { color: var(--green); } .saves .behind { color: var(--amber); } .saves .clash { color: var(--red); }
+  .saves .pick { border: 1px solid var(--red); border-radius: 6px; padding: 8px; margin: 6px 0; }
+  .saves .pick p { margin: 0 0 6px; color: var(--red); }
+  .saves button { padding: 4px 8px; font-size: 11px; }
+  .saves details { margin-top: 6px; color: var(--dim); }
+  .alert { font: 700 12px var(--pixel); letter-spacing: 1px; color: var(--red); border: 1px solid var(--red);
+           border-radius: 6px; padding: 4px 8px; margin-left: 10px; cursor: pointer; background: none; }
 </style>
 </head>
 <body>
 <header>
-  <div class="title"><h1>BRICK GAMES</h1><span class="count" id="count">loading…</span></div>
+  <div class="title"><h1>BRICK GAMES</h1><span class="count" id="count">loading…</span>
+    <button class="alert" id="clash" hidden></button></div>
   <div class="controls">
     <input type="search" id="q" placeholder="Search titles, developers, genres…" autocomplete="off">
     <select id="device" aria-label="Plays on">
@@ -158,6 +169,7 @@ async function load() {
   const genres = [...new Set(cat.games.map((g) => g.genre).filter(Boolean))].sort();
   for (const g of genres) $("genre").insertAdjacentHTML("beforeend", `<option>${esc(g)}</option>`);
   chips();
+  conflicts();
   readHash();
   render();
 }
@@ -303,10 +315,67 @@ function open(id) {
       <h3>Plays on</h3><div class="plays">${plays}</div>
       ${manual}
       ${guides}${local}
+      <h3>Saves</h3><div class="saves" id="saves">checking…</div>
       <h3>Files</h3><div class="files">${g.files.map(esc).join("\n")}</div></div></div>`;
   $("x").onclick = () => $("dlg").close();
   if (st) $("read").onclick = () => reader(g);
   if (!$("dlg").open) $("dlg").showModal();
+  showSaves(g);
+}
+
+// Saves (saves.py, the saves service behind /api/saves): each device's copy, the history, and, when
+// devices disagree, the user's pick of the version to keep (nothing is chosen for them).
+const when = (t) => t ? new Date(t * 1000).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "";
+const bytes = (n) => n >= 1024 ? `${Math.round(n / 1024)} KiB` : `${n} B`;
+let saveDevices = {};
+async function showSaves(g) {
+  const box = $("saves");
+  let s;
+  try {
+    const r = await fetch(`/api/saves/${g.id}`);
+    if (!r.ok) throw new Error(r.status);
+    s = await r.json();
+  } catch { box.textContent = "The save sync isn't answering."; return; }
+  if (!$("saves") || $("saves") !== box) return;  // the dialog moved on
+  if (!s.head) { box.textContent = "No saves synced yet."; return; }
+  const name = (d) => saveDevices[d] || d;
+  const byWhom = (sha) => (s.versions[sha]?.from || []).map(name).join(", ");
+  const rows = Object.entries(s.devices).map(([d, v]) => {
+    const tag = s.conflict.includes(v.sha) && s.conflict.length ? ["clash", "in conflict"]
+      : v.sha === s.head ? ["ok", "in sync"] : ["behind", "behind"];
+    return `<tr><td>${esc(name(d))}</td><td class="${tag[0]}">${tag[1]}</td><td>${esc(v.name)}</td><td>${when(v.at)}</td></tr>`;
+  }).join("");
+  const pick = s.conflict.length ? `<div class="pick"><p>Devices have different saves. Which one do you keep?
+      The others stay in the history; no device is overwritten until you pick.</p><table>${s.conflict.map((sha) => {
+      const v = s.versions[sha];
+      return `<tr><td>${esc(byWhom(sha))}</td><td>${bytes(v.size)}</td><td>${when(v.first)}</td>
+        <td><a href="/api/saves/${g.id}/${sha}">download</a></td>
+        <td><button data-keep="${sha}">KEEP THIS ONE</button></td></tr>`;
+    }).join("")}</table></div>` : "";
+  const history = Object.entries(s.versions).sort((a, b) => b[1].first - a[1].first).map(([sha, v]) =>
+    `<tr><td>${when(v.first)}</td><td>${esc(byWhom(sha))}</td><td>${bytes(v.size)}</td>
+      <td>${sha === s.head ? "current" : ""}</td><td><a href="/api/saves/${g.id}/${sha}">download</a></td></tr>`).join("");
+  box.innerHTML = `${pick}<table>${rows}</table>
+    <details><summary>History (${Object.keys(s.versions).length})</summary><table>${history}</table></details>`;
+  box.onclick = async (e) => {
+    const b = e.target.closest("[data-keep]"); if (!b) return;
+    b.disabled = true;
+    await fetch(`/api/saves/${g.id}/keep`, { method: "POST", body: JSON.stringify({ sha: b.dataset.keep }) });
+    showSaves(g);
+    conflicts();
+  };
+}
+async function conflicts() {
+  try {
+    const r = await fetch("/api/saves");
+    if (!r.ok) return;
+    const all = await r.json();
+    saveDevices = all.devices || {};
+    const waiting = all.games.filter((x) => x.conflict);
+    $("clash").hidden = !waiting.length;
+    $("clash").textContent = `${waiting.length} SAVE ${waiting.length === 1 ? "CONFLICT" : "CONFLICTS"}`;
+    $("clash").onclick = () => open(waiting[0].game);
+  } catch { /* the save sync is optional for the page */ }
 }
 
 // The guide reader: its contents, a search over its sections (/api/guides/<id>/search), and the text.
