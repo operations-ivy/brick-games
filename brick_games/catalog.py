@@ -32,6 +32,7 @@ import concurrent.futures as cf
 import hashlib
 import io
 import json
+import os
 import re
 import time
 from pathlib import Path, PurePath
@@ -191,6 +192,18 @@ def write_file(dest: Path, body: bytes) -> None:
     tmp.replace(dest)
 
 
+def adopt(original: Path, dest: Path) -> None:
+    """A new original whose AVIF is already cached: that AVIF was made from the
+    same libretro picture, so the original takes its time and nothing is built
+    again (no work, and the URL's ?v= stays, so browsers keep their copy).
+    Only an original changed later is newer than its AVIF."""
+    try:
+        st = dest.stat()
+    except FileNotFoundError:
+        return
+    os.utime(original, ns=(st.st_atime_ns, st.st_mtime_ns))
+
+
 class Downloads:
     """The art downloads' allowance for one scan: ART_BUDGET seconds, and none
     after GitHub rate limits us. Shared by the worker threads."""
@@ -222,6 +235,7 @@ def get_art(cache: Path, system: dict, kind: str, thumb: str | None, game_id: st
                 if data:
                     write_file(original, data)
                     result = "ok"
+                    adopt(original, dest)
                 else:
                     result = "missing"
             except sources.RateLimited as e:

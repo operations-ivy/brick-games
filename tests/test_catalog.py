@@ -486,3 +486,20 @@ def test_the_manual_cache_drops_the_least_recently_opened(tmp_path):
     shelf.open("snes", f"{2:016x}")[0].close()  # over 250 bytes: 1 goes
     kept = sorted(f.stem for f in (tmp_path / "manual-cache" / "snes").iterdir())
     assert kept == [f"{0:016x}", f"{2:016x}"]
+
+
+def test_a_new_original_keeps_the_cached_avif(tmp_path, monkeypatch):
+    """0.7.0's first fill: every download re-encoded art already cached (and changed its URL)."""
+    cache_dir = tmp_path / "media"
+    dest = cache_dir / "snes" / "Named_Boxarts" / "0123456789abcdef.avif"
+    dest.parent.mkdir(parents=True)
+    dest.write_bytes(catalog.shrink(png(), "Named_Boxarts"))
+    old = 1_700_000_000
+    os.utime(dest, (old, old))
+    monkeypatch.setattr(sources, "fetch_thumb", lambda *a: png())
+    monkeypatch.setattr(catalog, "shrink", lambda *a: pytest.fail("built again"))
+    original = tmp_path / "library" / "snes" / "media" / "G" / "box.png"
+    rel, result = catalog.get_art(cache_dir, {"id": "snes", "libretro": "x"}, "Named_Boxarts", "G.png",
+                                  "0123456789abcdef", original, catalog.Downloads())
+    assert result == "ok" and original.exists() and original.stat().st_mtime == dest.stat().st_mtime
+    assert rel == catalog.versioned("snes/Named_Boxarts/0123456789abcdef.avif", dest.read_bytes())
