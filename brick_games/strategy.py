@@ -256,6 +256,29 @@ class Strategy:
             if (meta := self.kept(game)) and meta["sections"]:  # one kept empty by 0.8.0 isn't shown
                 game["strategy"] = {"grade": meta["grade"], "sections": len(meta["sections"]), "v": meta["v"]}
                 self.grades[meta["grade"]] += 1
+        self._wanted(games, rank)
+
+    def _wanted(self, games: list[dict], rank: dict[str, float]) -> None:
+        """DATA/strategy/wanted.json: the games ranked 80+ without a complete
+        guide, best first, with where to find one on GameFAQs and the library
+        folder a hand-saved one goes in (guide_filer.py, /api/guides/wanted)."""
+        wanted = []
+        for game in games:
+            score = rank.get(game["id"])
+            grade = (game.get("strategy") or {}).get("grade")
+            if score is None or score < RANK_MIN or grade in ("complete", "hand-saved"):
+                continue
+            gamefaqs = (game.get("guides") or {}).get("gamefaqs")
+            folder = self.folder(game)
+            wanted.append({
+                "id": game["id"], "title": game["title"], "system": game["system"], "rank": round(score, 1),
+                "grade": grade,
+                "gamefaqs": f"https://gamefaqs.gamespot.com/-/{gamefaqs}-/faqs" if gamefaqs
+                else f"https://gamefaqs.gamespot.com/search?game={urllib.parse.quote(game['title'])}",
+                "folder": str(folder.relative_to(self.lib)) if folder else None,
+            })
+        wanted.sort(key=lambda w: -w["rank"])
+        write(self.store / "wanted.json", json.dumps(wanted, ensure_ascii=False, indent=1))
 
     def _one(self, game: dict, system: dict, rank: float | None) -> None:
         folder = self.folder(game)

@@ -13,6 +13,7 @@ manuals. Nothing here touches the ROMs; the library on the drive is only read.
                             503 when it isn't cached and the drive is offline
     GET  /api/guides?q=<title words>
                             games with a local strategy guide (strategy.py), by title
+    GET  /api/guides/wanted the games ranked 80+ without a complete guide (guide_filer.py)
     GET  /api/guides/<id>   a game's guide: source, license, grade, its sections
     GET  /api/guides/<id>/text
                             the guide, as Markdown
@@ -324,6 +325,13 @@ class Handler(BaseHTTPRequestHandler):
             log.warning("guide unreadable", game=game_id, error=f"{type(e).__name__}: {e}")
             self._respond(500, b'{"error": "this guide is unreadable"}', "application/json", "/api/guides")
 
+    def _wanted(self, path: str) -> None:
+        try:
+            f = self.data / "strategy" / "wanted.json"
+            self._send_entity(Entity.of(f.read_bytes(), f.stat().st_mtime), "application/json", path)
+        except FileNotFoundError:
+            self._respond(503, b'{"error": "no list yet: the next scan writes it"}', "application/json", path)
+
     def _find_guides(self, path: str) -> None:
         """Games with a local guide whose title has every word of ?q=."""
         _, _, query = self.path.partition("?")
@@ -352,6 +360,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 ROUTES = {"/": Handler._page, "/api/catalog": Handler._catalog, "/api/guides": Handler._find_guides,
+          "/api/guides/wanted": Handler._wanted,
           "/health": Handler._health, "/ready": Handler._health, "/metrics": Handler._metrics}
 
 

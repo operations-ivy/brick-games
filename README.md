@@ -114,6 +114,15 @@ devices play each system (brick-k8s-config#108).
   an AI session: `/api/guides?q=<title>`, `/api/guides/<id>`,
   `/api/guides/<id>/text` and `/api/guides/<id>/search?q=<words>` (the
   `game-guide` skill in homelab-context).
+  **Filing GameFAQs guides you save** (`brick_games/guide_filer.py`, on the
+  laptop, standard library only): `--wanted` lists the games ranked 80+
+  without a complete guide, best first, with their GameFAQs links (each
+  scan writes the list: `/api/guides/wanted`). Run it with no arguments and
+  it watches `~/Downloads`: open a guide in the browser, save it as text, and
+  it's matched to the game by its file name (the system's name settles a
+  title two systems share; otherwise it asks), copied over ssh to the game's
+  folder on brick2000 as `guide-gamefaqs.txt` (an older one kept, dated) and
+  moved to `~/Downloads/filed/`. Nothing downloads from GameFAQs.
 - **Save sync** (brick-games#19, the user, 2026-11-21): brick9000, the
   Retroid and the RG476H share their saves (`saves.py`). Battery saves
   (RetroArch `.srm`) and PlayStation memory cards (DuckStation's
