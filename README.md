@@ -36,6 +36,9 @@ devices play each system (brick-k8s-config#108).
   most 2 hours (`ART_BUDGET`) and stops for the night if GitHub rate limits
   it, so the first fill (about 15,000 pictures, 2-3 GB) takes a night or
   two. `GITHUB_TOKEN`, if set, lifts the limits; nothing needs it.
+  A system with `fetch: false` in `systems.yaml` gets no new downloads and
+  keeps the art already cached: arcade, since 2026-11-21 (2,121 games; its
+  fill is brick-games#22).
 - **Facts** (year, genre, players, developer, publisher) come from
   libretro-database's `metadat`. Coverage is good for cartridge systems and
   patchy for disc systems.

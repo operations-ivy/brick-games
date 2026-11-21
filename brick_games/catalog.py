@@ -337,7 +337,7 @@ def scan_system(root: Path, media: Path, lib: Path, system: dict, fbneo: tuple[d
     files = find_files(root, system)
     games = group(files, system, titles, parents)
     indexes: dict[str, dict[str, list[str]]] = {}
-    if games:
+    if games and system.get("fetch", True):
         try:
             indexes = sources.thumb_indexes(system["libretro"], listings)
         except OSError as e:  # no new art; the kept art is still listed

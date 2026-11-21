@@ -497,3 +497,20 @@ def test_a_new_original_keeps_the_cached_avif(tmp_path, monkeypatch):
                                   "0123456789abcdef", original, catalog.Downloads())
     assert result == "ok" and original.exists() and original.stat().st_mtime == dest.stat().st_mtime
     assert rel == catalog.versioned("snes/Named_Boxarts/0123456789abcdef.avif", dest.read_bytes())
+
+
+def test_a_system_with_fetch_off_downloads_nothing_but_keeps_its_art(tmp_path, offline, monkeypatch):
+    roms, data, lib = dirs(tmp_path)
+    config = catalog.load_systems()
+    arcade = next(s for s in config["systems"] if s["id"] == "arcade")
+    assert arcade["fetch"] is False  # as systems.yaml has it
+    monkeypatch.setattr(catalog, "load_systems", lambda: config)
+    arcade["fetch"] = True  # first, art kept from before
+    first = {g["title"]: g["art"] for g in catalog.scan(roms, data, lib)["games"]}
+    assert first["Street Fighter II"]["box"]
+    arcade["fetch"] = False
+    asked = []
+    monkeypatch.setattr(sources, "thumb_indexes", lambda system, cache=None: asked.append(system) or {})
+    again = {g["title"]: g["art"] for g in catalog.scan(roms, data, lib)["games"]}
+    assert again["Street Fighter II"] == first["Street Fighter II"]
+    assert "FBNeo - Arcade Games" not in asked
