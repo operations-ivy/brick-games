@@ -441,8 +441,8 @@ def scan(root: Path, data: Path, lib: Path, stats: Stats | None = None, rater: r
             systems.append({k: system[k] for k in ("id", "name", "devices")}
                            | {"count": len(found), "guides": bool(system.get("wikidata"))})
     walkthroughs.add(games, {s["id"]: s for s in config["systems"]})
-    stats.strategy = walkthroughs.results
-    stats.grades = walkthroughs.grades
+    stats.strategy = dict(walkthroughs.results)
+    stats.grades = dict(walkthroughs.grades)
     stats.ratings = rater.results
     stats.manuals = shelf.results
     stats.guides = guide.results

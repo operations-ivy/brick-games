@@ -1,6 +1,8 @@
 import json
+import threading
 import urllib.error
 import urllib.request
+from http.server import ThreadingHTTPServer
 
 import pytest
 
@@ -21,6 +23,7 @@ PAGES = {
     "Final Fantasy II": {"cats": ["Games", "NES", "Guides at completion stage 3"], "text": "The NES game."},
     "Stub Game": {"cats": ["Games", "SNES", "Guides at completion stage 1"], "text": "Barely begun."},
     "Stub Game/Controls": {"text": "Press A."},
+    "Empty Game": {"cats": ["Games", "SNES", "Guides at completion stage 0"], "text": ""},
 }
 
 
@@ -61,7 +64,8 @@ def lib(tmp_path):
     root = tmp_path / "library"
     (root / "snes").mkdir(parents=True)
     (root / "snes" / "media.json").write_text(json.dumps(
-        {"a" * 16: "Chrono Trigger", "b" * 16: "Final Fantasy II", "c" * 16: "Stub Game", "d" * 16: "Obscure"}))
+        {"a" * 16: "Chrono Trigger", "b" * 16: "Final Fantasy II", "c" * 16: "Stub Game", "d" * 16: "Obscure",
+         "e" * 16: "Empty Game"}))
     return root
 
 
@@ -83,15 +87,22 @@ def test_a_title_needs_the_systems_platform(wiki):
     assert strategy.find_page(linked, SNES) == "Final Fantasy IV"
 
 
-def test_guides_for_games_ranked_80_and_up(wiki, tmp_path, lib):
+def scanned(tmp_path, lib):
     games = [game("a" * 16, "Chrono Trigger", metascore=92), game("b" * 16, "Final Fantasy II", metascore=90),
-             game("c" * 16, "Stub Game", metascore=85), game("d" * 16, "Obscure", metascore=70)]
+             game("c" * 16, "Stub Game", metascore=85), game("d" * 16, "Obscure", metascore=70),
+             game("e" * 16, "Empty Game", metascore=88)]
     st = strategy.Strategy(tmp_path / "data", lib)
     st.add(games, {"snes": SNES})
-    ct, ff, stub, obscure = games
+    return games, st
+
+
+def test_guides_for_games_ranked_80_and_up(wiki, tmp_path, lib):
+    games, st = scanned(tmp_path, lib)
+    ct, ff, stub, obscure, empty = games
     assert ct["strategy"]["grade"] == "complete" and stub["strategy"]["grade"] == "stub"
     assert "strategy" not in ff and "strategy" not in obscure  # no SNES page; under 80
-    assert st.results == {"fetched": 2, "cached": 0, "none": 1, "error": 0, "deferred": 0}
+    assert "strategy" not in empty  # a page with nothing on it isn't a guide
+    assert st.results == {"fetched": 2, "cached": 0, "none": 2, "error": 0, "deferred": 0}
     assert st.grades == {"complete": 1, "stub": 1}
     folder = lib / "snes" / "media" / "Chrono Trigger"
     md = (folder / "guide.md").read_text()
@@ -103,10 +114,15 @@ def test_guides_for_games_ranked_80_and_up(wiki, tmp_path, lib):
     meta = json.loads((folder / "guide.json").read_text())
     assert [s["title"] for s in meta["sections"]][:3] == ["Overview", "Gameplay", "Walkthrough"]
     assert (tmp_path / "data" / "strategy" / f"{'a' * 16}.md").read_text() == md  # the NVMe copy
-    # next scan: kept, not fetched again
+
+
+def test_a_kept_guide_is_not_fetched_again(wiki, tmp_path, lib, monkeypatch):
+    games, _ = scanned(tmp_path, lib)
+    monkeypatch.setattr(strategy, "api", lambda **p: pytest.fail("asked StrategyWiki again"))
     again = strategy.Strategy(tmp_path / "data", lib)
     again.add(games, {"snes": SNES})
     assert again.results["cached"] == 2 and again.results["fetched"] == 0
+    assert games[0]["strategy"]["grade"] == "complete"
 
 
 def test_a_hand_saved_gamefaqs_guide_is_indexed(wiki, tmp_path, lib):
@@ -147,27 +163,26 @@ def get(url):
         return e.code, e.headers, e.read()
 
 
-def test_the_web_serves_guides(tmp_path, wiki, lib):
-    from http.server import ThreadingHTTPServer
-    import threading
-
+@pytest.fixture
+def server(tmp_path, wiki, lib):
     data = tmp_path / "data"
     games = [game("a" * 16, "Chrono Trigger", metascore=92)]
     strategy.Strategy(data, lib).add(games, {"snes": SNES})
     (data / "catalog.json").write_text(json.dumps({"games": games}))
     srv = ThreadingHTTPServer(("127.0.0.1", 0), web.make_handler(data))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    base = f"http://127.0.0.1:{srv.server_address[1]}"
-    try:
-        status, h, body = get(f"{base}/api/guides/{'a' * 16}")
-        assert status == 200 and json.loads(body)["grade"] == "complete" and h["ETag"]
-        status, h, body = get(f"{base}/api/guides/{'a' * 16}/text")
-        assert status == 200 and h["Content-Type"].startswith("text/markdown") and body.startswith(b"# Chrono Trigger")
-        status, _, body = get(f"{base}/api/guides/{'a' * 16}/search?q=magus+fire")
-        assert json.loads(body)["sections"][0]["title"] == "Magus"
-        status, _, body = get(f"{base}/api/guides?q=chrono")
-        assert [g["title"] for g in json.loads(body)] == ["Chrono Trigger"]
-        assert get(f"{base}/api/guides/{'f' * 16}")[0] == 404
-    finally:
-        srv.shutdown()
-        srv.server_close()
+    yield f"http://127.0.0.1:{srv.server_address[1]}"
+    srv.shutdown()
+    srv.server_close()
+
+
+def test_the_web_serves_guides(server):
+    status, h, body = get(f"{server}/api/guides/{'a' * 16}")
+    assert status == 200 and json.loads(body)["grade"] == "complete" and h["ETag"]
+    status, h, body = get(f"{server}/api/guides/{'a' * 16}/text")
+    assert status == 200 and h["Content-Type"].startswith("text/markdown") and body.startswith(b"# Chrono Trigger")
+    status, _, body = get(f"{server}/api/guides/{'a' * 16}/search?q=magus+fire")
+    assert json.loads(body)["sections"][0]["title"] == "Magus"
+    status, _, body = get(f"{server}/api/guides?q=chrono")
+    assert [g["title"] for g in json.loads(body)] == ["Chrono Trigger"]
+    assert get(f"{server}/api/guides/{'f' * 16}")[0] == 404

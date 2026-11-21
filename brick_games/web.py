@@ -59,6 +59,7 @@ log = brick_observe.get_logger(__name__)
 PAGE_FILE = Path(__file__).parent / "static" / "index.html"
 MEDIA_PATH = re.compile(r"^/media/(?P<rel>[a-z0-9]+/(?:Named_(?:Boxarts|Titles|Snaps)/[0-9a-f]{16}\.(?P<art>avif|png)"
                         r"|manuals/[0-9a-f]{16}\.(?P<manual>pdf)))$")
+MAX_GUIDE_HITS = 50  # games /api/guides?q= lists at most
 GUIDE_PATH = re.compile(r"^/api/guides/(?P<id>[0-9a-f]{16})(?P<what>/text|/search)?$")
 MEDIA_TYPES = {"avif": "image/avif", "png": "image/png", "pdf": "application/pdf"}
 STREAM_CHUNK = 256 * 1024  # media is sent in pieces: a manual can be tens of MB
@@ -233,7 +234,7 @@ class Handler(BaseHTTPRequestHandler):
         if route := ROUTES.get(path):
             route(self, path)
         elif m := GUIDE_PATH.match(path):
-            self._guide(m["id"], m["what"] or "", parse_qs(query).get("q", [""])[0])
+            self._guide(m["id"], m["what"] or "", query_q(query))
         elif m := MEDIA_PATH.match(path):
             # parse_qs drops blank values: a bare ?v= is not a versioned URL.
             versioned = "v" in parse_qs(query)
@@ -319,18 +320,26 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_entity(Entity.of(meta_file.read_bytes(), st.st_mtime), "application/json", "/api/guides")
         except FileNotFoundError:
             self._respond(404, b'{"error": "no local guide for this game"}', "application/json", "/api/guides")
+        except (ValueError, KeyError) as e:  # a guide file the scan didn't finish, or an old format
+            log.warning("guide unreadable", game=game_id, error=f"{type(e).__name__}: {e}")
+            self._respond(500, b'{"error": "this guide is unreadable"}', "application/json", "/api/guides")
 
     def _find_guides(self, path: str) -> None:
         """Games with a local guide whose title has every word of ?q=."""
         _, _, query = self.path.partition("?")
-        words = parse_qs(query).get("q", [""])[0].lower().split()
+        words = query_q(query).lower().split()
         try:
             games = json.loads(self.catalog.get(self.data / "catalog.json").body)["games"]
         except FileNotFoundError:
             self._respond(503, NO_CATALOG, "application/json", path)
             return
-        found = [{"id": g["id"], "title": g["title"], "system": g["system"], **g["strategy"]}
-                 for g in games if g.get("strategy") and all(w in g["title"].lower() for w in words)][:50]
+        found = []
+        for g in games:
+            title = g["title"].lower()
+            if g.get("strategy") and all(w in title for w in words):
+                found.append({"id": g["id"], "title": g["title"], "system": g["system"], **g["strategy"]})
+                if len(found) == MAX_GUIDE_HITS:
+                    break
         self._send_entity(Entity.of(json.dumps(found, ensure_ascii=False).encode()), "application/json", path)
 
     def _health(self, path: str) -> None:
@@ -343,8 +352,12 @@ class Handler(BaseHTTPRequestHandler):
 
 
 ROUTES = {"/": Handler._page, "/api/catalog": Handler._catalog, "/api/guides": Handler._find_guides,
-          "/health": Handler._health,
-          "/ready": Handler._health, "/metrics": Handler._metrics}
+          "/health": Handler._health, "/ready": Handler._health, "/metrics": Handler._metrics}
+
+
+def query_q(query: str) -> str:
+    """A query string's ?q= (blank when it has none)."""
+    return parse_qs(query).get("q", [""])[0]
 
 
 def make_handler(data: Path, lib: Path | None = None, manual_cache: int = MANUAL_CACHE_BYTES) -> type[Handler]:

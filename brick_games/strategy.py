@@ -36,8 +36,10 @@ import re
 import time
 import urllib.parse
 import urllib.request
+from collections import Counter
+from operator import itemgetter
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import brick_observe
 
@@ -115,7 +117,8 @@ def find_page(game: dict, system: dict) -> str | None:
                 prop="categories", cllimit="max", clcategories="|".join(wanted))
     for page in found["query"].get("pages", []):
         cats = {c["title"] for c in page.get("categories", [])}
-        if not page.get("missing") and "Category:Games" in cats and len(cats) > 1:
+        # A game (Games) on one of the system's platforms (any other category asked for).
+        if not page.get("missing") and cats > {"Category:Games"}:
             return page["title"]
     return None
 
@@ -133,10 +136,8 @@ def subpages(page: str) -> list[str]:
     """The walkthrough's pages in order: as the Table of Contents links them,
     else every subpage by name."""
     prefix = f"{page}/"
-    try:
-        text = api(action="parse", page=f"{page}/Table of Contents", prop="wikitext")["parse"]["wikitext"]
-    except KeyError:  # no Table of Contents: {"error": {"code": "missingtitle"}}
-        text = None
+    # No Table of Contents: the API answers {"error": {"code": "missingtitle"}}.
+    text = api(action="parse", page=f"{page}/Table of Contents", prop="wikitext").get("parse", {}).get("wikitext")
     if text:
         names = [n.strip().replace("_", " ") for n in re.findall(r"\[\[([^\]|#]+)", text)]
         pages = [n for n in dict.fromkeys(names) if n.startswith(prefix) and not n.endswith("/Table of Contents")]
@@ -160,17 +161,62 @@ def to_markdown(text: str, shift: int = 1) -> str:
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
-def index(md: str) -> list[dict]:
+class Section(TypedDict):
+    """One heading of a guide and the text it covers (md[start:end])."""
+
+    title: str
+    level: int
+    start: int
+    end: int
+
+
+def index(md: str) -> list[Section]:
     """Every heading below the title: its text, level and the text it covers."""
     heads = [(m.start(), len(m.group(1)), m.group(2).strip()) for m in re.finditer(r"^(#{2,6}) (.+)$", md, re.M)]
-    return [{"title": title, "level": level, "start": start,
-             "end": heads[i + 1][0] if i + 1 < len(heads) else len(md)}
+    return [Section(title=title, level=level, start=start, end=heads[i + 1][0] if i + 1 < len(heads) else len(md))
             for i, (start, level, title) in enumerate(heads)]
 
 
 def hand_saved(text: str) -> str:
     """A GameFAQs guide saved by hand, as Markdown: its underlined titles as headings."""
     return UNDERLINE.sub(lambda m: f"### {m.group(1).strip()}", text.replace("\r\n", "\n")).strip()
+
+
+def digest(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def write(dest: Path, text: str) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(f".{dest.name}.part")
+    tmp.write_text(text)
+    tmp.replace(dest)
+
+
+def wiki_parts(page: str) -> list[str]:
+    """A StrategyWiki guide's text, page by page, with its source and license first."""
+    source = source_url(page)
+    parts = [f"From StrategyWiki, {source}, by its contributors ({source}?action=history), "
+             f"under {LICENSE} ({LICENSE_URL})."]
+    for title in [page, *subpages(page)[:MAX_PAGES]]:
+        text = extract(title)
+        time.sleep(PAUSE)
+        name = title.split("/", 1)[1] if "/" in title else "Overview"
+        if text.strip():
+            parts.append(f"## {name}\n\n{to_markdown(text)}")
+    return parts
+
+
+def source_url(page: str) -> str:
+    return f"{WIKI}{urllib.parse.quote(page.replace(' ', '_'))}"
+
+
+def build_guide(title: str, wiki: list[str], hand: str | None) -> str:
+    """The guide's Markdown: the title, the wiki's parts, then a hand-saved guide."""
+    parts = [f"# {title}", *wiki]
+    if hand:
+        parts.append(f"## GameFAQs guide (saved by hand)\n\n{hand_saved(hand)}")
+    return "\n\n".join(parts) + "\n"
 
 
 class Strategy:
@@ -181,7 +227,7 @@ class Strategy:
         self.lib = lib
         self.deadline = time.monotonic() + budget
         self.results = dict.fromkeys(RESULTS, 0)
-        self.grades: dict[str, int] = {}
+        self.grades: Counter[str] = Counter()
         self._folders: dict[str, dict[str, str]] = {}
 
     def folder(self, game: dict) -> Path | None:
@@ -207,76 +253,69 @@ class Strategy:
                 self.results["error"] += 1
                 log.warning("guide failed", game=game["title"], system=game["system"],
                             error=f"{type(e).__name__}: {e}")
-            if meta := self.kept(game):
+            if (meta := self.kept(game)) and meta["sections"]:  # one kept empty by 0.8.0 isn't shown
                 game["strategy"] = {"grade": meta["grade"], "sections": len(meta["sections"]), "v": meta["v"]}
-                self.grades[meta["grade"]] = self.grades.get(meta["grade"], 0) + 1
+                self.grades[meta["grade"]] += 1
 
     def _one(self, game: dict, system: dict, rank: float | None) -> None:
         folder = self.folder(game)
         meta = self.kept(game)
         saved = folder / HAND_SAVED if folder else None
         hand = saved.read_text(errors="replace") if saved and saved.is_file() else None
+        hand_changed = hand is not None and (not meta or meta.get("hand_saved") != digest(hand))
         if rank is None or rank < RANK_MIN:
-            if hand and (not meta or meta.get("hand_saved") != digest(hand)):
-                self._write(game, folder, None, None, hand)  # a hand-saved guide counts whatever the rank
+            if hand_changed:  # a hand-saved guide counts whatever the game's rank
+                self._keep(game, folder, None, None, hand)
             return
-        due = not meta or time.time() - meta.get("fetched", 0) > REFRESH or \
-            (hand is not None and meta.get("hand_saved") != digest(hand))
-        if not due:
+        stale = not meta or time.time() - meta.get("fetched", 0) > REFRESH
+        if not meta and not hand_changed and time.time() - self.checked(game) <= REFRESH:
+            self.results["none"] += 1  # looked for last time; asked again after REFRESH
+            return
+        if not (stale or hand_changed):
             self.results["cached"] += 1
             return
         if time.monotonic() > self.deadline:
             self.results["deferred"] += 1
             return
         page = find_page(game, system)
-        if page is None and hand is None:
-            self.results["none"] += 1
-            return
-        self._write(game, folder, page, stage(page) if page else None, hand)
-        self.results["fetched"] += 1
+        kept = (page is not None or hand is not None) and self._keep(game, folder, page,
+                                                                     stage(page) if page else None, hand)
+        if not kept:
+            write(self.store / f"{game['id']}.none", json.dumps({"checked": int(time.time()), "page": page}))
+        self.results["fetched" if kept else "none"] += 1
 
-    def _write(self, game: dict, folder: Path | None, page: str | None, level: int | None, hand: str | None) -> None:
-        parts = [f"# {game['title']}"]
-        source = None
-        if page:
-            source = f"{WIKI}{urllib.parse.quote(page.replace(' ', '_'))}"
-            parts.append(f"From StrategyWiki, {source}, by its contributors "
-                         f"({source}?action=history), under {LICENSE} ({LICENSE_URL}).")
-            for title in [page, *subpages(page)[:MAX_PAGES]]:
-                text = extract(title)
-                time.sleep(PAUSE)
-                name = title.split("/", 1)[1] if "/" in title else "Overview"
-                if text.strip():
-                    parts.append(f"## {name}\n\n{to_markdown(text)}")
-        if hand:
-            parts.append(f"## GameFAQs guide (saved by hand)\n\n{hand_saved(hand)}")
-        md = "\n\n".join(parts) + "\n"
+    def checked(self, game: dict) -> float:
+        """When a game was last found to have no guide (0: never)."""
+        try:
+            return json.loads((self.store / f"{game['id']}.none").read_text())["checked"]
+        except (OSError, ValueError, KeyError):
+            return 0
+
+    def _keep(self, game: dict, folder: Path | None, page: str | None, level: int | None, hand: str | None) -> bool:
+        """Build the guide and write it to DATA/strategy and the game's folder;
+        False when there's nothing in it (a wiki page with no text)."""
+        md = build_guide(game["title"], wiki_parts(page) if page else [], hand)
+        sections = index(md)
+        if not sections:  # Bahamut Lagoon, 2026-11-21: a page with nothing on it
+            log.info("guide empty; not kept", game=game["title"], system=game["system"], page=page)
+            return False
         grade = GRADES.get(level, "stub") if page else "hand-saved"
-        meta = {"game": game["title"], "system": game["system"], "source": source, "license": LICENSE if page else None,
-                "stage": level, "grade": grade, "fetched": int(time.time()), "v": digest(md)[:VERSION_LEN],
-                "hand_saved": digest(hand) if hand else None, "sections": index(md)}
+        meta = {"game": game["title"], "system": game["system"], "source": source_url(page) if page else None,
+                "license": LICENSE if page else None, "stage": level, "grade": grade, "fetched": int(time.time()),
+                "v": digest(md)[:VERSION_LEN], "hand_saved": digest(hand) if hand else None, "sections": sections}
         body = json.dumps(meta, ensure_ascii=False)
-        for base, stem in ((self.store, game["id"]), (folder, None)):
-            if base is None:
-                continue
-            write(base / (f"{stem}.md" if stem else GUIDE_MD), md)
-            write(base / (f"{stem}.json" if stem else GUIDE_JSON), body)
-        log.info("guide kept", game=game["title"], system=game["system"], grade=grade,
-                 sections=len(meta["sections"]), chars=len(md))
+        targets = [(self.store, f"{game['id']}.md", f"{game['id']}.json")]
+        if folder:
+            targets.append((folder, GUIDE_MD, GUIDE_JSON))
+        for base, md_name, json_name in targets:
+            write(base / md_name, md)
+            write(base / json_name, body)
+        log.info("guide kept", game=game["title"], system=game["system"], grade=grade, sections=len(sections),
+                 chars=len(md))
+        return True
 
 
-def digest(text: str) -> str:
-    return hashlib.sha256(text.encode()).hexdigest()
-
-
-def write(dest: Path, text: str) -> None:
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_name(f".{dest.name}.part")
-    tmp.write_text(text)
-    tmp.replace(dest)
-
-
-def search(md: str, sections: list[dict], query: str, limit: int = 5) -> list[dict]:
+def search(md: str, sections: list[Section], query: str, limit: int = 5) -> list[dict]:
     """The sections that best match the query's words (how often they appear,
     a heading match counting more), with their text."""
     words = [w for w in re.findall(r"[a-z0-9']+", query.lower()) if len(w) > 1]
@@ -286,9 +325,8 @@ def search(md: str, sections: list[dict], query: str, limit: int = 5) -> list[di
     for s in sections:
         text = md[s["start"]:s["end"]].lower()
         title = s["title"].lower()
-        score = sum(text.count(w) + 5 * title.count(w) for w in words)
-        if score:
+        if score := sum(text.count(w) + 5 * title.count(w) for w in words):
             scored.append((score, s))
-    scored.sort(key=lambda t: -t[0])
+    scored.sort(key=itemgetter(0), reverse=True)
     return [{"title": s["title"], "level": s["level"], "score": score, "text": md[s["start"]:s["end"]]}
             for score, s in scored[:limit]]
