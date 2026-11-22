@@ -5,7 +5,8 @@ the agents and the page use, behind games.brick.nozdormu.cloud/api/saves.
                                         each device's, and whether there's a conflict
     GET  /api/saves/config?device=      that device's save folders (saves.yaml)
     GET  /api/saves/agent.py            the agent (saves_agent.py), for brick9000's timer
-    GET  /api/saves/<game>              a game's state: versions, devices, conflict, log
+    GET  /api/saves/<game>              a game's state: versions, devices, conflict, log,
+                                        and `about`: what's in each version (save_decode)
     GET  /api/saves/<game>/<sha>        one version's bytes
     POST /api/saves/<game>/upload?device=&name=&mtime=&parent=
                                         a device's save (the body): stored by its hash,
@@ -20,6 +21,7 @@ read-only); saves live in the library (LIBRARY, read-write; saves.py).
 
 from __future__ import annotations
 
+import functools
 import json
 import re
 import threading
@@ -34,7 +36,7 @@ import yaml
 from brick_observe import metrics as observe_metrics
 from prometheus_client import Counter, Gauge
 
-from . import saves
+from . import save_decode, saves
 
 log = brick_observe.get_logger(__name__)
 CONFIG_FILE = Path(__file__).with_name("saves.yaml")
@@ -45,6 +47,15 @@ EVENTS = Counter("games_saves_events_total", "Save events, by type and the refer
 CONFLICTS = Gauge("games_saves_conflicts", "Games whose saves wait for the user's pick")
 GAMES = Gauge("games_saves_games", "Games with at least one synced save")
 LAST_SYNC = Gauge("games_saves_last_sync_timestamp_seconds", "When each device's agent last finished", ["device"])
+
+
+@functools.lru_cache(maxsize=1024)  # a version never changes: its file is named by its hash
+def about(system: str, title: str, path: Path) -> dict:
+    """What's in one version (save_decode), or nothing if its file is gone."""
+    try:
+        return save_decode.describe({"system": system, "title": title}, path.read_bytes())
+    except OSError:
+        return {"blank": False, "summary": ""}
 
 
 class Catalog:
@@ -95,11 +106,18 @@ class Service:
         GAMES.set(len(states))
         CONFLICTS.set(sum(1 for s in states if s["conflict"]))
 
+    def state(self, game: dict) -> dict:
+        """A game's state, with what's in each version."""
+        state = self.store.load(game)
+        state["about"] = {sha: about(game["system"], game["title"], self.store.blob_path(game, sha))
+                          for sha in state["versions"]}
+        return state
+
     def emit(self, game: dict, event: dict) -> dict:
         event |= {"id": uuid.uuid4().hex, "game": game["id"], "at": time.time()}
         self.events.produce(game["id"], event)
         self.referee.wait(event["id"])
-        return self.store.load(game)
+        return self.state(game)
 
 
 class BadRequest(ValueError):
@@ -183,7 +201,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/saves/agent.py":
             self._send(200, AGENT_FILE.read_bytes(), "text/x-python; charset=utf-8")
         elif (m := GAME.match(path)) and m["what"] is None:
-            self._json(200, self.service.store.load(self._game(m["game"])))
+            self._json(200, self.service.state(self._game(m["game"])))
         elif m and len(m["what"]) == 64:
             self._blob(self._game(m["game"]), m["what"])
         else:

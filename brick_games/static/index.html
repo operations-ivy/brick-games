@@ -340,20 +340,23 @@ async function showSaves(g) {
   if (!s.head) { box.textContent = "No saves synced yet."; return; }
   const name = (d) => saveDevices[d] || d;
   const byWhom = (sha) => (s.versions[sha]?.from || []).map(name).join(", ");
+  // What's in a version (save_decode): a blank one is flagged so it's never the easy pick.
+  const inside = (sha) => { const a = (s.about || {})[sha] || {};
+    return `<td class="${a.blank ? "clash" : ""}">${esc(a.summary || "")}</td>`; };
   const rows = Object.entries(s.devices).map(([d, v]) => {
     const tag = s.conflict.includes(v.sha) && s.conflict.length ? ["clash", "in conflict"]
       : v.sha === s.head ? ["ok", "in sync"] : ["behind", "behind"];
-    return `<tr><td>${esc(name(d))}</td><td class="${tag[0]}">${tag[1]}</td><td>${esc(v.name)}</td><td>${when(v.at)}</td></tr>`;
+    return `<tr><td>${esc(name(d))}</td><td class="${tag[0]}">${tag[1]}</td><td>${esc(v.name)}</td>${inside(v.sha)}<td>${when(v.at)}</td></tr>`;
   }).join("");
   const pick = s.conflict.length ? `<div class="pick"><p>Devices have different saves. Which one do you keep?
       The others stay in the history; no device is overwritten until you pick.</p><table>${s.conflict.map((sha) => {
       const v = s.versions[sha];
-      return `<tr><td>${esc(byWhom(sha))}</td><td>${bytes(v.size)}</td><td>${when(v.first)}</td>
+      return `<tr><td>${esc(byWhom(sha))}</td>${inside(sha)}<td>${bytes(v.size)}</td><td>${when(v.first)}</td>
         <td><a href="/api/saves/${g.id}/${sha}">download</a></td>
         <td><button data-keep="${sha}">KEEP THIS ONE</button></td></tr>`;
     }).join("")}</table></div>` : "";
   const history = Object.entries(s.versions).sort((a, b) => b[1].first - a[1].first).map(([sha, v]) =>
-    `<tr><td>${when(v.first)}</td><td>${esc(byWhom(sha))}</td><td>${bytes(v.size)}</td>
+    `<tr><td>${when(v.first)}</td><td>${esc(byWhom(sha))}</td>${inside(sha)}<td>${bytes(v.size)}</td>
       <td>${sha === s.head ? "current" : ""}</td><td><a href="/api/saves/${g.id}/${sha}">download</a></td></tr>`).join("");
   box.innerHTML = `${pick}<table>${rows}</table>
     <details><summary>History (${Object.keys(s.versions).length})</summary><table>${history}</table></details>`;
