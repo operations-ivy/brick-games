@@ -261,3 +261,11 @@ def test_a_new_save_is_never_written_over_a_file(service, monkeypatch):
                      say=said.append)
     assert mine.read_bytes() == b"brick9000 save, not matched"
     assert any(line.startswith("skip    Super Metroid") for line in said)
+
+
+def test_the_service_says_whats_in_each_version(service):
+    base, tmp, _ = service
+    put(tmp / "b9k" / "Super Metroid (JU) [!].srm", bytes(8192))  # never saved
+    run(base, "brick9000", tmp)
+    about = state(base, GAME["id"])["about"]
+    assert list(about.values()) == [{"blank": True, "summary": "no saved slots"}]
