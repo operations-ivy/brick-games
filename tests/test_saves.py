@@ -176,6 +176,18 @@ def test_a_name_two_systems_share_goes_by_the_rom_on_the_device():
     assert games.match("Breath of Fire II", on_device={"s" * 16}) == "s" * 16
 
 
+
+def test_a_skipped_system_settles_a_shared_name(tmp_path):
+    # The RG476H has Chrono Trigger for SNES and DS; DS is DraStic there, so a RetroArch .srm is SNES.
+    cat = {"games": [{"id": "s" * 16, "system": "snes", "title": "Chrono Trigger", "files": ["snes/Chrono Trigger (U) [!].smc"]},
+                     {"id": "n" * 16, "system": "nds", "title": "Chrono Trigger", "files": ["nds/Chrono Trigger (USA).nds"]}]}
+    games = saves_agent.Games(cat)
+    assert games.match("Chrono Trigger (U) [!]", on_device={"s" * 16, "n" * 16}) is None
+    put(tmp_path / "saves" / "Chrono Trigger (U) [!].srm", b"sram")
+    cfg = {"roots": [{"path": str(tmp_path / "saves"), "kind": "sram"}], "skip": ["nds"]}
+    found = saves_agent.find_saves(saves_agent.Local(), cfg, games, {"s" * 16: "x", "n" * 16: "y"})
+    assert list(found) == ["s" * 16]
+
 def test_new_saves_go_in_the_systems_core_folder_and_skipped_systems_stay_out(tmp_path):
     fs = saves_agent.Local()
     cfg = {"roots": [{"path": str(tmp_path / "saves"), "kind": "sram",

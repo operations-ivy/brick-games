@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 from collections import defaultdict
+from collections.abc import Collection
 import hashlib
 import json
 import os
@@ -173,10 +174,13 @@ class Games:
         for system in catalog.get("systems", []):  # each system's game files (systems.yaml's exts)
             self.exts.setdefault(system["id"], set()).update(f".{e.lower()}" for e in system.get("exts", []))
 
-    def match(self, name: str, system: str | None = None, on_device: set[str] | None = None) -> str | None:
+    def match(self, name: str, system: str | None = None, on_device: set[str] | None = None,
+              skip: Collection[str] = ()) -> str | None:
         """The game id a name is, or None: no match, or games in two systems
-        that the device's ROMs (on_device: game ids) don't tell apart."""
-        ids = {i for s, i in self.keys.get(norm(name), set()) if system is None or s == system}
+        that the device's ROMs (on_device: game ids) don't tell apart.
+        Systems in skip aren't candidates."""
+        ids = {i for s, i in self.keys.get(norm(name), set())
+               if (system is None or s == system) and s not in skip}
         if len(ids) > 1 and on_device is not None:
             ids &= on_device  # Breath of Fire II is SNES and GBA: the one whose ROM is here
         return next(iter(ids)) if len(ids) == 1 else None
@@ -198,8 +202,9 @@ def find_saves(fs, cfg: dict, games: Games, roms: dict[str, str] | None = None) 
                 stem = stem[: -len(root["strip"])]
             # A save in a core's folder (mGBA/) is that core's system's: TMNT is GBA, GameCube and arcade.
             folder = posixpath.basename(posixpath.dirname(path))
-            game_id = games.match(stem, root.get("system") or folders.get(folder), on_device)
-            if game_id is None or games.by_id[game_id]["system"] in cfg.get("skip", []):
+            # A skipped system is no candidate: the RG476H's Chrono Trigger .srm is SNES, not DS (DraStic).
+            game_id = games.match(stem, root.get("system") or folders.get(folder), on_device, cfg.get("skip", ()))
+            if game_id is None:
                 continue
             kind = kind_of(games.by_id[game_id]["system"])
             if root.get("kind", kind) != kind or (kind == "ps1" and size != PS1_CARD):
