@@ -132,10 +132,12 @@ class Adb:
         # Through the shell, not `adb push`: Android 13 refuses a push into another app's
         # Android/data (DuckStation's cards, "remote fchown failed"). The shell's file is
         # its own, so it's opened up for the emulator (chmod is a no-op on /sdcard's FUSE).
-        part = f"{posixpath.dirname(path)}/.{posixpath.basename(path)}.part"
-        q = shlex.quote
-        self._adb("shell", f"mkdir -p {q(posixpath.dirname(path))} && cat > {q(part)} && "
-                           f"{{ chmod 666 {q(part)} 2>/dev/null; mv {q(part)} {q(path)}; }}", data=data)
+        folder = shlex.quote(posixpath.dirname(path))
+        part = shlex.quote(f"{posixpath.dirname(path)}/.{posixpath.basename(path)}.part")
+        dest = shlex.quote(path)
+        self._adb("shell", f"mkdir -p {folder} && cat > {part} && {{ chmod 666 {part} 2>/dev/null; mv {part} {dest}; }}",
+                  data=data)
+        # Read back: a shell pipe has no checksum of its own, and a bad save is worse than none.
         if self.read(path) != data:
             raise OSError(f"{path}: what's on the device isn't what was sent")
 
@@ -194,6 +196,7 @@ def find_saves(fs, cfg: dict, games: Games, roms: dict[str, str] | None = None,
     known (path -> game id, from the last sync) settles one the ROMs don't."""
     found: dict[str, tuple[str, int, float]] = {}
     on_device = set(roms) if roms is not None else None
+    skip, known = cfg.get("skip", []), known or {}
     for root in cfg["roots"]:
         folders = core_folders(root)
         for path, size, mtime in fs.list(root["path"], root.get("recursive", False)):
@@ -206,13 +209,11 @@ def find_saves(fs, cfg: dict, games: Games, roms: dict[str, str] | None = None,
             # A save in a core's folder (mGBA/) is that core's system's: TMNT is GBA, GameCube and arcade.
             folder = posixpath.basename(posixpath.dirname(path))
             # A skipped system is no candidate: the RG476H's Chrono Trigger .srm is SNES, not DS (DraStic).
-            game_id = games.match(stem, root.get("system") or folders.get(folder), on_device, cfg.get("skip", ()))
-            if game_id is None and (known or {}).get(path) in games.by_id:
+            game_id = games.match(stem, root.get("system") or folders.get(folder), on_device, skip)
+            if game_id is None and known.get(path) in games.by_id:
                 # TMNT is GBA and arcade on the RG476H, in one flat folder: the save the agent synced is the GBA one.
                 game_id = known[path]
-                if games.by_id[game_id]["system"] in cfg.get("skip", ()):
-                    continue
-            if game_id is None:
+            if game_id is None or games.by_id[game_id]["system"] in skip:
                 continue
             kind = kind_of(games.by_id[game_id]["system"])
             if root.get("kind", kind) != kind or (kind == "ps1" and size != PS1_CARD):
@@ -270,76 +271,94 @@ def save_state(state_file: Path, mine: dict) -> None:
     tmp.replace(state_file)
 
 
+class Sync:
+    """One run of the agent on one device: upload what changed here, then
+    write the current versions over saves that haven't."""
+
+    def __init__(self, server: Server, fs, device: str, files: dict, dry_run: bool, say) -> None:
+        self.server, self.fs, self.device, self.files, self.dry_run, self.say = server, fs, device, files, dry_run, say
+        self.cfg = server.json("GET", "/api/saves/config", query={"device": device})
+        self.skip = self.cfg.get("skip", [])
+        self.games = Games(server.json("GET", "/api/catalog"))
+        self.stems = rom_stems(fs, self.cfg, self.games) if self.cfg.get("roms") else None
+        known = {f["path"]: game_id for game_id, f in files.items()}
+        self.found = find_saves(fs, self.cfg, self.games, self.stems, known)
+        self.done = {"uploaded": 0, "written": 0, "conflicts": 0, "same": 0}
+
+    def _upload(self, game_id: str, data: bytes, path: str, mtime: float, parent: str | None) -> None:
+        query = {"device": self.device, "name": posixpath.basename(path), "mtime": str(mtime), "parent": parent or ""}
+        self.server.json("POST", f"/api/saves/{game_id}/upload", data, query)
+
+    def upload_changed(self) -> None:
+        for game_id, (path, _, mtime) in sorted(self.found.items()):
+            data = self.fs.read(path)
+            sha = hashlib.sha256(data).hexdigest()
+            last = self.files.get(game_id, {}).get("sha")
+            if sha == last:
+                self.done["same"] += 1
+                continue
+            self.say(f"upload  {self.games.by_id[game_id]['title']}: {posixpath.basename(path)} "
+                     f"({'changed' if last else 'new'})")
+            if self.dry_run:
+                continue
+            self._upload(game_id, data, path, mtime, last)
+            self.files[game_id] = {"path": path, "sha": sha}
+            self.done["uploaded"] += 1
+
+    def _target(self, game: dict, head: str) -> str | None:
+        """Where the current version goes on this device, or None to leave it be."""
+        here = self.files.get(game["id"], {})
+        if game["id"] in self.found:
+            path = self.found[game["id"]][0]
+            if here.get("sha") == head:
+                return None
+            if hashlib.sha256(self.fs.read(path)).hexdigest() != here.get("sha"):
+                return None  # changed here since: it was uploaded
+            return path
+        stem = (self.stems or {}).get(game["id"])
+        if stem is None or (path := new_path(self.fs, self.cfg, game, stem)) is None:
+            return None  # the game isn't on this device
+        if self.fs.exists(path):  # a save there that wasn't matched to this game: never written over
+            self.say(f"skip    {game['title']}: {posixpath.basename(path)} is already there (not matched; left alone)")
+            return None
+        return path
+
+    def write_heads(self) -> None:
+        for entry in self.server.json("GET", "/api/saves")["games"]:
+            game, head = self.games.by_id.get(entry["game"]), entry["head"]
+            if game is None or head is None or game["system"] in self.skip:
+                continue
+            if entry["conflict"]:
+                self.done["conflicts"] += 1
+                self.say(f"conflict {game['title']}: pick the version to keep on the page")
+                continue
+            if (path := self._target(game, head)) is None:
+                continue
+            self.say(f"write   {game['title']}: {posixpath.basename(path)} (the current version)")
+            if self.dry_run:
+                continue
+            data = self.server.request("GET", f"/api/saves/{game['id']}/{head}")
+            self.fs.write(path, data)
+            self._upload(game["id"], data, path, time.time(), head)  # now in sync: the page shows it
+            self.files[game["id"]] = {"path": path, "sha": head}
+            self.done["written"] += 1
+
+
 def sync(server: Server, fs, device: str, state_file: Path, dry_run: bool = False, say=print) -> dict:
-    cfg = server.json("GET", "/api/saves/config", query={"device": device})
-    games = Games(server.json("GET", "/api/catalog"))
     try:
         mine = json.loads(state_file.read_text())
     except (FileNotFoundError, json.JSONDecodeError):  # none yet, or cut short: start afresh (uploads only)
         mine = {"files": {}}
-    files = mine["files"]
-    done = {"uploaded": 0, "written": 0, "conflicts": 0, "same": 0}
-
-    def upload(game_id: str, data: bytes, path: str, mtime: float, parent: str | None) -> dict:
-        query = {"device": device, "name": posixpath.basename(path), "mtime": str(mtime), "parent": parent or ""}
-        return server.json("POST", f"/api/saves/{game_id}/upload", data, query)
-
-    stems = rom_stems(fs, cfg, games) if cfg.get("roms") else None
-    found = find_saves(fs, cfg, games, stems, {f["path"]: game_id for game_id, f in files.items()})
-    states: dict[str, dict] = {}
+    run = Sync(server, fs, device, mine["files"], dry_run, say)
     try:
-        for game_id, (path, _, mtime) in sorted(found.items()):
-            data = fs.read(path)
-            sha = hashlib.sha256(data).hexdigest()
-            last = files.get(game_id, {}).get("sha")
-            title = games.by_id[game_id]["title"]
-            if sha == last:
-                done["same"] += 1
-                continue
-            say(f"upload  {title}: {posixpath.basename(path)} ({'changed' if last else 'new'})")
-            if dry_run:
-                continue
-            states[game_id] = upload(game_id, data, path, mtime, last)
-            files[game_id] = {"path": path, "sha": sha}
-            done["uploaded"] += 1
-
-        summary = server.json("GET", "/api/saves")["games"]
-        for entry in summary:
-            game_id, head = entry["game"], entry["head"]
-            game = games.by_id.get(game_id)
-            if game is None or head is None or game["system"] in cfg.get("skip", []):
-                continue
-            if entry["conflict"]:
-                done["conflicts"] += 1
-                say(f"conflict {game['title']}: pick the version to keep on the page")
-                continue
-            here = files.get(game_id, {})
-            if game_id in found:
-                path = found[game_id][0]
-                if here.get("sha") == head:
-                    continue
-                current = hashlib.sha256(fs.read(path)).hexdigest()
-                if current != here.get("sha"):  # changed here since: it was uploaded above
-                    continue
-            else:
-                if not stems or game_id not in stems or (path := new_path(fs, cfg, game, stems[game_id])) is None:
-                    continue  # the game isn't on this device
-                if fs.exists(path):  # a save there that wasn't matched to this game: never written over
-                    say(f"skip    {game['title']}: {posixpath.basename(path)} is already there (not matched; left alone)")
-                    continue
-            say(f"write   {game['title']}: {posixpath.basename(path)} (the current version)")
-            if dry_run:
-                continue
-            data = server.request("GET", f"/api/saves/{game_id}/{head}")
-            fs.write(path, data)
-            upload(game_id, data, path, time.time(), head)  # now in sync: the page shows it
-            files[game_id] = {"path": path, "sha": head}
-            done["written"] += 1
+        run.upload_changed()
+        run.write_heads()
     finally:  # a run cut short still remembers what it uploaded and wrote
         if not dry_run:
             save_state(state_file, mine)
     if not dry_run:
         server.json("POST", "/api/saves/seen", b"", {"device": device})
+    done = run.done
     say(f"{device}: {done['uploaded']} uploaded, {done['written']} written, {done['same']} unchanged, "
         f"{done['conflicts']} conflicts waiting")
     return done
