@@ -37,7 +37,6 @@ import re
 import shlex
 import subprocess
 import sys
-import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -130,13 +129,15 @@ class Adb:
         return self._adb("exec-out", f"cat {shlex.quote(path)}")
 
     def write(self, path: str, data: bytes) -> None:
-        with tempfile.NamedTemporaryFile() as f:
-            f.write(data)
-            f.flush()
-            part = f"{posixpath.dirname(path)}/.{posixpath.basename(path)}.part"
-            self._adb("shell", f"mkdir -p {shlex.quote(posixpath.dirname(path))}")
-            self._adb("push", f.name, part)
-            self._adb("shell", f"mv {shlex.quote(part)} {shlex.quote(path)}")
+        # Through the shell, not `adb push`: Android 13 refuses a push into another app's
+        # Android/data (DuckStation's cards, "remote fchown failed"). The shell's file is
+        # its own, so it's opened up for the emulator (chmod is a no-op on /sdcard's FUSE).
+        part = f"{posixpath.dirname(path)}/.{posixpath.basename(path)}.part"
+        q = shlex.quote
+        self._adb("shell", f"mkdir -p {q(posixpath.dirname(path))} && cat > {q(part)} && "
+                           f"{{ chmod 666 {q(part)} 2>/dev/null; mv {q(part)} {q(path)}; }}", data=data)
+        if self.read(path) != data:
+            raise OSError(f"{path}: what's on the device isn't what was sent")
 
     def join(self, root: str, name: str) -> str:
         return posixpath.join(root, name)
@@ -186,9 +187,11 @@ class Games:
         return next(iter(ids)) if len(ids) == 1 else None
 
 
-def find_saves(fs, cfg: dict, games: Games, roms: dict[str, str] | None = None) -> dict[str, tuple[str, int, float]]:
+def find_saves(fs, cfg: dict, games: Games, roms: dict[str, str] | None = None,
+               known: dict[str, str] | None = None) -> dict[str, tuple[str, int, float]]:
     """game id -> this device's save for it (the newest, if it has several).
-    roms (game id -> ROM stem on the device) settles a name two systems share."""
+    roms (game id -> ROM stem on the device) settles a name two systems share;
+    known (path -> game id, from the last sync) settles one the ROMs don't."""
     found: dict[str, tuple[str, int, float]] = {}
     on_device = set(roms) if roms is not None else None
     for root in cfg["roots"]:
@@ -204,6 +207,11 @@ def find_saves(fs, cfg: dict, games: Games, roms: dict[str, str] | None = None) 
             folder = posixpath.basename(posixpath.dirname(path))
             # A skipped system is no candidate: the RG476H's Chrono Trigger .srm is SNES, not DS (DraStic).
             game_id = games.match(stem, root.get("system") or folders.get(folder), on_device, cfg.get("skip", ()))
+            if game_id is None and (known or {}).get(path) in games.by_id:
+                # TMNT is GBA and arcade on the RG476H, in one flat folder: the save the agent synced is the GBA one.
+                game_id = known[path]
+                if games.by_id[game_id]["system"] in cfg.get("skip", ()):
+                    continue
             if game_id is None:
                 continue
             kind = kind_of(games.by_id[game_id]["system"])
@@ -255,6 +263,13 @@ def new_path(fs, cfg: dict, game: dict, stem: str) -> str | None:
     return None
 
 
+def save_state(state_file: Path, mine: dict) -> None:
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    tmp = state_file.with_name(f".{state_file.name}.part")
+    tmp.write_text(json.dumps(mine, indent=1))
+    tmp.replace(state_file)
+
+
 def sync(server: Server, fs, device: str, state_file: Path, dry_run: bool = False, say=print) -> dict:
     cfg = server.json("GET", "/api/saves/config", query={"device": device})
     games = Games(server.json("GET", "/api/catalog"))
@@ -270,61 +285,60 @@ def sync(server: Server, fs, device: str, state_file: Path, dry_run: bool = Fals
         return server.json("POST", f"/api/saves/{game_id}/upload", data, query)
 
     stems = rom_stems(fs, cfg, games) if cfg.get("roms") else None
-    found = find_saves(fs, cfg, games, stems)
+    found = find_saves(fs, cfg, games, stems, {f["path"]: game_id for game_id, f in files.items()})
     states: dict[str, dict] = {}
-    for game_id, (path, _, mtime) in sorted(found.items()):
-        data = fs.read(path)
-        sha = hashlib.sha256(data).hexdigest()
-        last = files.get(game_id, {}).get("sha")
-        title = games.by_id[game_id]["title"]
-        if sha == last:
-            done["same"] += 1
-            continue
-        say(f"upload  {title}: {posixpath.basename(path)} ({'changed' if last else 'new'})")
-        if dry_run:
-            continue
-        states[game_id] = upload(game_id, data, path, mtime, last)
-        files[game_id] = {"path": path, "sha": sha}
-        done["uploaded"] += 1
+    try:
+        for game_id, (path, _, mtime) in sorted(found.items()):
+            data = fs.read(path)
+            sha = hashlib.sha256(data).hexdigest()
+            last = files.get(game_id, {}).get("sha")
+            title = games.by_id[game_id]["title"]
+            if sha == last:
+                done["same"] += 1
+                continue
+            say(f"upload  {title}: {posixpath.basename(path)} ({'changed' if last else 'new'})")
+            if dry_run:
+                continue
+            states[game_id] = upload(game_id, data, path, mtime, last)
+            files[game_id] = {"path": path, "sha": sha}
+            done["uploaded"] += 1
 
-    summary = server.json("GET", "/api/saves")["games"]
-    for entry in summary:
-        game_id, head = entry["game"], entry["head"]
-        game = games.by_id.get(game_id)
-        if game is None or head is None or game["system"] in cfg.get("skip", []):
-            continue
-        if entry["conflict"]:
-            done["conflicts"] += 1
-            say(f"conflict {game['title']}: pick the version to keep on the page")
-            continue
-        here = files.get(game_id, {})
-        if game_id in found:
-            path = found[game_id][0]
-            if here.get("sha") == head:
+        summary = server.json("GET", "/api/saves")["games"]
+        for entry in summary:
+            game_id, head = entry["game"], entry["head"]
+            game = games.by_id.get(game_id)
+            if game is None or head is None or game["system"] in cfg.get("skip", []):
                 continue
-            current = hashlib.sha256(fs.read(path)).hexdigest()
-            if current != here.get("sha"):  # changed here since: it was uploaded above
+            if entry["conflict"]:
+                done["conflicts"] += 1
+                say(f"conflict {game['title']}: pick the version to keep on the page")
                 continue
-        else:
-            if not stems or game_id not in stems or (path := new_path(fs, cfg, game, stems[game_id])) is None:
-                continue  # the game isn't on this device
-            if fs.exists(path):  # a save there that wasn't matched to this game: never written over
-                say(f"skip    {game['title']}: {posixpath.basename(path)} is already there (not matched; left alone)")
+            here = files.get(game_id, {})
+            if game_id in found:
+                path = found[game_id][0]
+                if here.get("sha") == head:
+                    continue
+                current = hashlib.sha256(fs.read(path)).hexdigest()
+                if current != here.get("sha"):  # changed here since: it was uploaded above
+                    continue
+            else:
+                if not stems or game_id not in stems or (path := new_path(fs, cfg, game, stems[game_id])) is None:
+                    continue  # the game isn't on this device
+                if fs.exists(path):  # a save there that wasn't matched to this game: never written over
+                    say(f"skip    {game['title']}: {posixpath.basename(path)} is already there (not matched; left alone)")
+                    continue
+            say(f"write   {game['title']}: {posixpath.basename(path)} (the current version)")
+            if dry_run:
                 continue
-        say(f"write   {game['title']}: {posixpath.basename(path)} (the current version)")
-        if dry_run:
-            continue
-        data = server.request("GET", f"/api/saves/{game_id}/{head}")
-        fs.write(path, data)
-        upload(game_id, data, path, time.time(), head)  # now in sync: the page shows it
-        files[game_id] = {"path": path, "sha": head}
-        done["written"] += 1
-
+            data = server.request("GET", f"/api/saves/{game_id}/{head}")
+            fs.write(path, data)
+            upload(game_id, data, path, time.time(), head)  # now in sync: the page shows it
+            files[game_id] = {"path": path, "sha": head}
+            done["written"] += 1
+    finally:  # a run cut short still remembers what it uploaded and wrote
+        if not dry_run:
+            save_state(state_file, mine)
     if not dry_run:
-        state_file.parent.mkdir(parents=True, exist_ok=True)
-        tmp = state_file.with_name(f".{state_file.name}.part")
-        tmp.write_text(json.dumps(mine, indent=1))
-        tmp.replace(state_file)
         server.json("POST", "/api/saves/seen", b"", {"device": device})
     say(f"{device}: {done['uploaded']} uploaded, {done['written']} written, {done['same']} unchanged, "
         f"{done['conflicts']} conflicts waiting")

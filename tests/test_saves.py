@@ -188,6 +188,20 @@ def test_a_skipped_system_settles_a_shared_name(tmp_path):
     found = saves_agent.find_saves(saves_agent.Local(), cfg, games, {"s" * 16: "x", "n" * 16: "y"})
     assert list(found) == ["s" * 16]
 
+
+def test_a_save_synced_before_keeps_its_game(tmp_path):
+    # TMNT is GBA and arcade, both ROMs on the device, one flat folder: the last sync says which.
+    cat = {"games": [{"id": "g" * 16, "system": "gba", "title": "TMNT", "files": ["gba/TMNT (USA).gba"]},
+                     {"id": "a" * 16, "system": "arcade", "title": "TMNT", "files": ["arcade/TMNT (USA).zip"]}]}
+    games = saves_agent.Games(cat)
+    save = tmp_path / "saves" / "TMNT (USA).srm"
+    put(save, b"sram")
+    cfg = {"roots": [{"path": str(tmp_path / "saves"), "kind": "sram"}]}
+    roms = {"g" * 16: "TMNT (USA)", "a" * 16: "TMNT (USA)"}
+    assert saves_agent.find_saves(saves_agent.Local(), cfg, games, roms) == {}
+    found = saves_agent.find_saves(saves_agent.Local(), cfg, games, roms, {str(save): "g" * 16})
+    assert list(found) == ["g" * 16]
+
 def test_new_saves_go_in_the_systems_core_folder_and_skipped_systems_stay_out(tmp_path):
     fs = saves_agent.Local()
     cfg = {"roots": [{"path": str(tmp_path / "saves"), "kind": "sram",
