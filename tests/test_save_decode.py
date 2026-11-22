@@ -87,8 +87,8 @@ def test_a_super_metroid_slot_with_a_bad_checksum_is_skipped():
     assert sd.describe(SM, bytes(data)) == {"blank": True, "summary": "no saved slots"}
 
 
-def test_the_checksum_matches_a_real_save():
-    # From the user's Super Metroid save (2026-11-21): slot A's stored checksum is 0x98f7.
+def test_the_checksum_carries_the_low_byte_into_the_high():
+    # The rule was checked against a real save (its stored 0x98f7), which stays out of the repo.
     slot = bytearray(sd.SM_SLOT)
     assert sd.sm_checksum(bytes(slot)) == 0  # sanity: nothing in, nothing out
     slot[0] = 0xFF

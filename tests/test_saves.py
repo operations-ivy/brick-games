@@ -264,7 +264,7 @@ def test_a_new_save_is_never_written_over_a_file(service, monkeypatch):
 
 
 def test_the_service_says_whats_in_each_version(service):
-    base, tmp, lib = service
+    base, tmp, _ = service
     put(tmp / "b9k" / "Super Metroid (JU) [!].srm", bytes(8192))  # never saved
     run(base, "brick9000", tmp)
     about = state(base, GAME["id"])["about"]

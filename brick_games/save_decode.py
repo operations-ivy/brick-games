@@ -50,6 +50,16 @@ def is_blank(data: bytes) -> bool:
     return count / len(data) >= BLANK_SHARE
 
 
+def _word(buf: bytes, offset: int) -> int:
+    return int.from_bytes(buf[offset : offset + 2], "little")
+
+
+def _ps1_title(block: bytes) -> str:
+    """The title in a save block's header: Shift-JIS, often full-width, as plain text."""
+    title = block[4:68].decode("shift_jis", errors="replace").split("\x00")[0]
+    return " ".join(unicodedata.normalize("NFKC", title).split())
+
+
 def ps1_card(data: bytes) -> dict[str, Any]:
     """A raw 128 KiB card: frame 0 is the header, frames 1-15 the directory,
     block n holds save n, whose header carries the title the console shows
@@ -62,9 +72,7 @@ def ps1_card(data: bytes) -> dict[str, Any]:
             deleted += 1
         if status != PS1_FIRST:
             continue
-        block = data[i * PS1_BLOCK : (i + 1) * PS1_BLOCK]
-        title = block[4:68].decode("shift_jis", errors="replace").split("\x00")[0]
-        title = " ".join(unicodedata.normalize("NFKC", title).split())
+        title = _ps1_title(data[i * PS1_BLOCK : (i + 1) * PS1_BLOCK])
         code = entry[10:30].split(b"\x00")[0].decode("ascii", errors="replace")
         saves.append({"block": i, "code": code, "title": title or code})
     if not saves:
@@ -77,7 +85,7 @@ def ps1_card(data: bytes) -> dict[str, Any]:
 # Super Metroid: SRAM holds three 0x65C-byte slots from 0x10, each a copy of
 # RAM from $7E:09A2, with a 16-bit checksum at 2*slot and its complement at
 # 8 + 2*slot. Checked against a real save: the checksum matches.
-SM_BASE, SM_SLOT = 0x10, 0x65C
+SM_BASE, SM_SLOT, SM_SLOTS = 0x10, 0x65C, 3
 SM_AREAS = ["Crateria", "Brinstar", "Norfair", "Wrecked Ship", "Maridia", "Tourian", "Ceres", "Debug"]
 
 
@@ -91,23 +99,22 @@ def sm_checksum(slot: bytes) -> int:
 
 
 def super_metroid(data: bytes) -> dict[str, Any] | None:
-    if len(data) < SM_BASE + 3 * SM_SLOT:
+    if len(data) < SM_BASE + SM_SLOTS * SM_SLOT:
         return None
-    word = lambda buf, o: int.from_bytes(buf[o : o + 2], "little")  # noqa: E731
     slots = []
-    for n in range(3):
+    for n in range(SM_SLOTS):
         slot = data[SM_BASE + n * SM_SLOT : SM_BASE + (n + 1) * SM_SLOT]
-        stored, complement = word(data, 2 * n), word(data, 8 + 2 * n)
+        stored, complement = _word(data, 2 * n), _word(data, 8 + 2 * n)
         if not any(slot) or stored ^ 0xFFFF != complement or sm_checksum(slot) != stored:
             continue
-        area = word(slot, 0x158)
+        area = _word(slot, 0x158)
         slots.append({
             "slot": n + 1,
-            "time": f"{word(slot, 0x3E)}:{word(slot, 0x3C):02d}:{word(slot, 0x3A):02d}",
+            "time": f"{_word(slot, 0x3E)}:{_word(slot, 0x3C):02d}:{_word(slot, 0x3A):02d}",
             "area": SM_AREAS[area] if area < len(SM_AREAS) else f"area {area}",
-            "save_station": word(slot, 0x156),
-            "energy": f"{word(slot, 0x20)}/{word(slot, 0x22)}",
-            "missiles": f"{word(slot, 0x24)}/{word(slot, 0x26)}",
+            "save_station": _word(slot, 0x156),
+            "energy": f"{_word(slot, 0x20)}/{_word(slot, 0x22)}",
+            "missiles": f"{_word(slot, 0x24)}/{_word(slot, 0x26)}",
         })
     if not slots:
         return {"blank": True, "summary": "no saved slots"}

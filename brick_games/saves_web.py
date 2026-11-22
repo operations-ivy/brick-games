@@ -49,13 +49,21 @@ GAMES = Gauge("games_saves_games", "Games with at least one synced save")
 LAST_SYNC = Gauge("games_saves_last_sync_timestamp_seconds", "When each device's agent last finished", ["device"])
 
 
+UNKNOWN = {"blank": False, "summary": ""}
+
+
 @functools.lru_cache(maxsize=1024)  # a version never changes: its file is named by its hash
+def _describe(system: str, title: str, path: Path) -> dict:
+    return save_decode.describe({"system": system, "title": title}, path.read_bytes())
+
+
 def about(system: str, title: str, path: Path) -> dict:
-    """What's in one version (save_decode), or nothing if its file is gone."""
+    """What's in one version (save_decode). Shared by every caller: read only.
+    A file that isn't there (yet) is never cached."""
     try:
-        return save_decode.describe({"system": system, "title": title}, path.read_bytes())
+        return _describe(system, title, path)
     except OSError:
-        return {"blank": False, "summary": ""}
+        return UNKNOWN
 
 
 class Catalog:
