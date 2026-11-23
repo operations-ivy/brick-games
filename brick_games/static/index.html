@@ -27,6 +27,9 @@
   h1 { margin: 0; font-family: var(--pixel); font-size: 26px; letter-spacing: 2px; color: var(--cyan);
        text-shadow: 0 0 8px rgba(0,234,255,.7), 0 0 22px rgba(255,43,214,.35); }
   .count { font-family: var(--mono); color: var(--dim); }
+  .elsewhere { margin-left: auto; font: 700 12px var(--pixel); letter-spacing: 1px; color: var(--dim);
+               text-decoration: none; border: 1px solid var(--edge); border-radius: 6px; padding: 4px 8px; }
+  .elsewhere:hover { color: var(--cyan); border-color: var(--cyan); }
   .controls { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
   input[type=search], select {
     background: var(--panel); color: var(--text); border: 1px solid var(--edge); border-radius: 6px;
@@ -118,7 +121,9 @@
 <body>
 <header>
   <div class="title"><h1>BRICK GAMES</h1><span class="count" id="count">loading…</span>
-    <button class="alert" id="clash" hidden></button></div>
+    <button class="alert" id="clash" hidden></button>
+    <a class="elsewhere" href="https://presto.brick.nozdormu.cloud/media/devices"
+       title="Which movies and shows the handhelds and brick9000 hold">MEDIA PICKS</a></div>
   <div class="controls">
     <input type="search" id="q" placeholder="Search titles, developers, genres…" autocomplete="off">
     <select id="device" aria-label="Plays on">
