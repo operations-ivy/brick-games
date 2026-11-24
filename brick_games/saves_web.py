@@ -295,6 +295,10 @@ class Handler(BaseHTTPRequestHandler):
                 raise BadRequest(f"a PlayStation card is {saves.PS1_CARD} bytes, this is {len(body)}")
             # nothing saved in it (an emulator's fresh file): never over a real save (#32)
             event["blank"] = bool(save_decode.describe(game, body)["blank"])
+            head = self.service.store.load(game)["head"]
+            if head:  # whether the current one is blank, for versions stored before the flag
+                current = self.service.store.blob_path(game, head)
+                event["head_blank"] = about(game["system"], game["title"], current)["blank"]
         try:
             event["mtime"] = float(q["mtime"]) if q.get("mtime") else None
         except ValueError:

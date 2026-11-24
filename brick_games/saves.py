@@ -95,7 +95,8 @@ def apply(state: dict[str, Any], event: dict[str, Any]) -> str:
         version.setdefault("mtime", {})[device] = event.get("mtime")
         state["devices"][device] = {"sha": sha, "name": event["name"], "at": at}
         head, conflict = state["head"], state["conflict"]
-        head_blank = head is not None and state["versions"].get(head, {}).get("blank", False)
+        # a version from before #32 has no flag: the service tells (head_blank) from its bytes
+        head_blank = head is not None and bool(state["versions"].get(head, {}).get("blank") or event.get("head_blank"))
         if head is None:
             state["head"], outcome = sha, "first"
         elif sha == head and not conflict:

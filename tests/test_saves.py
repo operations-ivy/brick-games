@@ -398,3 +398,9 @@ def test_slot_10_reaches_a_device_whose_saves_folder_names_no_kind(service):
     assert run(base, "brick9000", tmp)["written"] == 1
     assert (tmp / "b9k-states" / "Super Metroid (JU) [!].state10").read_bytes() == b"retroid state"
     assert (tmp / "b9k" / "Super Metroid (JU) [!].srm").read_bytes() == b"in-game save"
+
+
+def test_a_blank_current_version_from_before_the_flag_still_gives_way():
+    s = saves.new_state(GAME)
+    saves.apply(s, up("old zeros", "brick9000"))  # stored before #32: no blank flag
+    assert saves.apply(s, up("real", "rg476h") | {"head_blank": True}) == "forward" and s["head"] == "real"
