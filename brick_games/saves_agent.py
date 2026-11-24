@@ -295,7 +295,9 @@ def new_path(fs, cfg: dict, game: dict, stem: str, track: str = SAVE) -> str | N
         write = root.get("write")
         if isinstance(write, dict):
             write = write.get(game["system"])
-        if write and root.get("kind", kind) == kind and root.get("system", game["system"]) == game["system"]:
+        # a root without a kind holds saves of every kind but states (state roots always say so)
+        root_kind = root.get("kind") or (kind if kind != "state" else None)
+        if write and root_kind == kind and root.get("system", game["system"]) == game["system"]:
             return fs.join(root["path"], write.format(stem=stem))
     return None
 

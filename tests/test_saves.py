@@ -384,3 +384,17 @@ def test_an_in_game_save_over_8_mib_is_refused_before_it_is_read(service):
     conn.endheaders()  # the headers alone: the answer comes before any body is sent
     assert conn.getresponse().status == 400
     conn.close()
+
+
+def test_slot_10_reaches_a_device_whose_saves_folder_names_no_kind(service):
+    """brick9000's saves root has no kind: a new state must still go to its states folder, never there."""
+    base, tmp, _ = service
+    states_config(service.svc, tmp)
+    put(tmp / "b9k-roms" / "snes" / "Super Metroid (JU) [!].smc", b"rom")
+    put(tmp / "b9k" / "Super Metroid (JU) [!].srm", b"in-game save")
+    put(tmp / "rp-states" / "Super Metroid (USA).state10", b"retroid state")
+    service.svc.config["rp2plus"]["cores"] = {"snes": "Snes9x"}
+    run(base, "rp2plus", tmp)
+    assert run(base, "brick9000", tmp)["written"] == 1
+    assert (tmp / "b9k-states" / "Super Metroid (JU) [!].state10").read_bytes() == b"retroid state"
+    assert (tmp / "b9k" / "Super Metroid (JU) [!].srm").read_bytes() == b"in-game save"
