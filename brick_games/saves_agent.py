@@ -18,6 +18,11 @@ Each run:
    the device but has no save there yet. Never during a conflict.
 4. Tells the service it ran (the page's "last synced").
 
+State slot 10 (`<game>.state10`, a root with kind "state") goes the same way
+as its own track, for the systems in the device's `cores`: each upload names
+the core, and a state is written only onto a device running the same core
+for that system (a state loads in no other).
+
 What it last synced per game is kept in --state (default
 ~/.local/state/brick-saves/<device>.json): that's how it tells "changed here"
 from "behind".
@@ -44,6 +49,7 @@ import urllib.request
 from pathlib import Path
 
 SERVER = "https://games.brick.nozdormu.cloud"
+SAVE, SLOT10 = "save", "slot10"  # the tracks: in-game saves, and RetroArch's state slot 10
 PS1_CARD = 128 * 1024
 ROMAN = {"ii": "2", "iii": "3", "iv": "4", "v": "5", "vi": "6", "vii": "7", "viii": "8"}
 
@@ -66,6 +72,28 @@ def kind_of(system: str) -> str:
 
 def stem_of(name: str) -> str:
     return name.rsplit(".", 1)[0]
+
+
+def core_id(name: str | None) -> str:
+    """A core's name, comparable across devices: "Genesis Plus GX" and
+    genesis_plus_gx_libretro.so are both "genesisplusgx"."""
+    n = re.sub(r"_libretro(_android)?\.so$", "", (name or "").lower())
+    return re.sub(r"[^a-z0-9]", "", n)
+
+
+def track_kind(system: str, track: str) -> str:
+    return "state" if track == SLOT10 else kind_of(system)
+
+
+def file_key(game_id: str, track: str) -> str:
+    """The agent's own record of what it last synced, per game and track."""
+    return game_id if track == SAVE else f"{game_id}#{track}"
+
+
+def split_key(key: str) -> tuple[str, str]:
+    """file_key's inverse: (game id, track)."""
+    game_id, _, track = key.partition("#")
+    return game_id, track or SAVE
 
 
 class Local:
@@ -190,14 +218,19 @@ class Games:
 
 
 def find_saves(fs, cfg: dict, games: Games, roms: dict[str, str] | None = None,
-               known: dict[str, str] | None = None) -> dict[str, tuple[str, int, float]]:
+               known: dict[str, str] | None = None, track: str = SAVE) -> dict[str, tuple[str, int, float]]:
     """game id -> this device's save for it (the newest, if it has several).
     roms (game id -> ROM stem on the device) settles a name two systems share;
-    known (path -> game id, from the last sync) settles one the ROMs don't."""
+    known (path -> game id, from the last sync) settles one the ROMs don't.
+    track SLOT10: its state slot 10, for the systems it names a core for."""
     found: dict[str, tuple[str, int, float]] = {}
     on_device = set(roms) if roms is not None else None
     skip, known = cfg.get("skip", []), known or {}
+    cores = cfg.get("cores", {})
     for root in cfg["roots"]:
+        is_state_root = root.get("kind") == "state"
+        if is_state_root != (track == SLOT10):
+            continue  # state roots are slot 10's, the others the in-game saves'
         folders = core_folders(root)
         for path, size, mtime in fs.list(root["path"], root.get("recursive", False)):
             name = posixpath.basename(path)
@@ -215,9 +248,12 @@ def find_saves(fs, cfg: dict, games: Games, roms: dict[str, str] | None = None,
                 game_id = known[path]
             if game_id is None or games.by_id[game_id]["system"] in skip:
                 continue
-            kind = kind_of(games.by_id[game_id]["system"])
+            system = games.by_id[game_id]["system"]
+            kind = track_kind(system, track)
             if root.get("kind", kind) != kind or (kind == "ps1" and size != PS1_CARD):
                 continue
+            if track == SLOT10 and system not in cores:
+                continue  # no core named for it here: its states stay put
             if game_id not in found or mtime > found[game_id][2]:
                 found[game_id] = (path, size, mtime)
     return found
@@ -249,17 +285,19 @@ def rom_stems(fs, cfg: dict, games: Games) -> dict[str, str]:
     return stems
 
 
-def new_path(fs, cfg: dict, game: dict, stem: str) -> str | None:
+def new_path(fs, cfg: dict, game: dict, stem: str, track: str = SAVE) -> str | None:
     """Where a new save for the game goes on this device: the first root that
     writes its kind. `write` is one name for every system, or one per system
     (RetroArch sorting saves into a folder per core): a system it doesn't
     name gets no new saves there."""
-    kind = kind_of(game["system"])
+    kind = track_kind(game["system"], track)
     for root in cfg["roots"]:
         write = root.get("write")
         if isinstance(write, dict):
             write = write.get(game["system"])
-        if write and root.get("kind", kind) == kind and root.get("system", game["system"]) == game["system"]:
+        # a root without a kind holds saves of every kind but states (state roots always say so)
+        root_kind = root.get("kind") or (kind if kind != "state" else None)
+        if write and root_kind == kind and root.get("system", game["system"]) == game["system"]:
             return fs.join(root["path"], write.format(stem=stem))
     return None
 
@@ -273,75 +311,104 @@ def save_state(state_file: Path, mine: dict) -> None:
 
 class Sync:
     """One run of the agent on one device: upload what changed here, then
-    write the current versions over saves that haven't."""
+    write the current versions over saves that haven't, for each track."""
 
     def __init__(self, server: Server, fs, device: str, files: dict, dry_run: bool, say) -> None:
         self.server, self.fs, self.device, self.files, self.dry_run, self.say = server, fs, device, files, dry_run, say
         self.cfg = server.json("GET", "/api/saves/config", query={"device": device})
         self.skip = self.cfg.get("skip", [])
+        self.cores = self.cfg.get("cores", {})
         self.games = Games(server.json("GET", "/api/catalog"))
         self.stems = rom_stems(fs, self.cfg, self.games) if self.cfg.get("roms") else None
-        known = {f["path"]: game_id for game_id, f in files.items()}
-        self.found = find_saves(fs, self.cfg, self.games, self.stems, known)
+        self.found: dict[str, dict[str, tuple[str, int, float]]] = {}
+        for track in (SAVE, SLOT10):
+            known = {}  # path -> game id, from this track's last sync
+            for key, f in files.items():
+                game_id, key_track = split_key(key)
+                if key_track == track:
+                    known[f["path"]] = game_id
+            self.found[track] = find_saves(fs, self.cfg, self.games, self.stems, known, track)
         self.done = {"uploaded": 0, "written": 0, "conflicts": 0, "same": 0}
 
-    def _upload(self, game_id: str, data: bytes, path: str, mtime: float, parent: str | None) -> None:
+    def _label(self, game_id: str, track: str) -> str:
+        return self.games.by_id[game_id]["title"] + (" (slot 10)" if track == SLOT10 else "")
+
+    def _upload(self, game_id: str, track: str, data: bytes, path: str, mtime: float, parent: str | None) -> None:
         query = {"device": self.device, "name": posixpath.basename(path), "mtime": str(mtime), "parent": parent or ""}
+        if track == SLOT10:
+            query |= {"track": track, "core": self.cores[self.games.by_id[game_id]["system"]]}
         self.server.json("POST", f"/api/saves/{game_id}/upload", data, query)
 
     def upload_changed(self) -> None:
-        for game_id, (path, _, mtime) in sorted(self.found.items()):
-            data = self.fs.read(path)
-            sha = hashlib.sha256(data).hexdigest()
-            last = self.files.get(game_id, {}).get("sha")
-            if sha == last:
-                self.done["same"] += 1
-                continue
-            self.say(f"upload  {self.games.by_id[game_id]['title']}: {posixpath.basename(path)} "
-                     f"({'changed' if last else 'new'})")
-            if self.dry_run:
-                continue
-            self._upload(game_id, data, path, mtime, last)
-            self.files[game_id] = {"path": path, "sha": sha}
-            self.done["uploaded"] += 1
+        for track, found in self.found.items():
+            for game_id, (path, _, mtime) in sorted(found.items()):
+                data = self.fs.read(path)
+                sha = hashlib.sha256(data).hexdigest()
+                key = file_key(game_id, track)
+                last = self.files.get(key, {}).get("sha")
+                if sha == last:
+                    self.done["same"] += 1
+                    continue
+                self.say(f"upload  {self._label(game_id, track)}: {posixpath.basename(path)} "
+                         f"({'changed' if last else 'new'})")
+                if self.dry_run:
+                    continue
+                self._upload(game_id, track, data, path, mtime, last)
+                self.files[key] = {"path": path, "sha": sha}
+                self.done["uploaded"] += 1
 
-    def _target(self, game: dict, head: str) -> str | None:
+    def _target(self, game: dict, head: str, track: str) -> str | None:
         """Where the current version goes on this device, or None to leave it be."""
-        here = self.files.get(game["id"], {})
-        if game["id"] in self.found:
-            path = self.found[game["id"]][0]
+        here = self.files.get(file_key(game["id"], track), {})
+        if game["id"] in self.found[track]:
+            path = self.found[track][game["id"]][0]
             if here.get("sha") == head:
                 return None
             if hashlib.sha256(self.fs.read(path)).hexdigest() != here.get("sha"):
                 return None  # changed here since: it was uploaded
             return path
         stem = (self.stems or {}).get(game["id"])
-        if stem is None or (path := new_path(self.fs, self.cfg, game, stem)) is None:
+        if stem is None or (path := new_path(self.fs, self.cfg, game, stem, track)) is None:
             return None  # the game isn't on this device
         if self.fs.exists(path):  # a save there that wasn't matched to this game: never written over
-            self.say(f"skip    {game['title']}: {posixpath.basename(path)} is already there (not matched; left alone)")
+            self.say(f"skip    {self._label(game['id'], track)}: {posixpath.basename(path)} is already there "
+                     "(not matched; left alone)")
             return None
         return path
 
     def write_heads(self) -> None:
-        for entry in self.server.json("GET", "/api/saves")["games"]:
-            game, head = self.games.by_id.get(entry["game"]), entry["head"]
-            if game is None or head is None or game["system"] in self.skip:
-                continue
-            if entry["conflict"]:
-                self.done["conflicts"] += 1
-                self.say(f"conflict {game['title']}: pick the version to keep on the page")
-                continue
-            if (path := self._target(game, head)) is None:
-                continue
-            self.say(f"write   {game['title']}: {posixpath.basename(path)} (the current version)")
-            if self.dry_run:
-                continue
-            data = self.server.request("GET", f"/api/saves/{game['id']}/{head}")
-            self.fs.write(path, data)
-            self._upload(game["id"], data, path, time.time(), head)  # now in sync: the page shows it
-            self.files[game["id"]] = {"path": path, "sha": head}
-            self.done["written"] += 1
+        summary = self.server.json("GET", "/api/saves")
+        for track, entries in ((SAVE, summary["games"]), (SLOT10, summary.get("states", []))):
+            for entry in entries:
+                self._write_head(entry, track)
+
+    def _write_head(self, entry: dict, track: str) -> None:
+        game, head = self.games.by_id.get(entry["game"]), entry["head"]
+        if game is None or head is None or game["system"] in self.skip:
+            return
+        if track == SLOT10:
+            mine = self.cores.get(game["system"])
+            if mine is None:
+                return  # this device doesn't share states for the system
+            if core_id(entry.get("core")) != core_id(mine):
+                self.say(f"skip    {self._label(game['id'], track)}: made with {entry.get('core')}, "
+                         f"this device runs {mine} for it")
+                return
+        if entry["conflict"]:
+            self.done["conflicts"] += 1
+            self.say(f"conflict {self._label(game['id'], track)}: pick the version to keep on the page")
+            return
+        if (path := self._target(game, head, track)) is None:
+            return
+        self.say(f"write   {self._label(game['id'], track)}: {posixpath.basename(path)} (the current version)")
+        if self.dry_run:
+            return
+        query = {"track": track} if track != SAVE else None
+        data = self.server.request("GET", f"/api/saves/{game['id']}/{head}", query=query)
+        self.fs.write(path, data)
+        self._upload(game["id"], track, data, path, time.time(), head)  # now in sync: the page shows it
+        self.files[file_key(game["id"], track)] = {"path": path, "sha": head}
+        self.done["written"] += 1
 
 
 def sync(server: Server, fs, device: str, state_file: Path, dry_run: bool = False, say=print) -> dict:

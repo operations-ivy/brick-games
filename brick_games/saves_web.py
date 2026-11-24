@@ -2,7 +2,8 @@
 the agents and the page use, behind games.brick.nozdormu.cloud/api/saves.
 
     GET  /api/saves                     every game with saves: its current version,
-                                        each device's, and whether there's a conflict
+                                        each device's, and whether there's a conflict;
+                                        `states`: the same for state slot 10 (with its core)
     GET  /api/saves/config?device=      that device's save folders (saves.yaml)
     GET  /api/saves/agent.py            the agent (saves_agent.py), for brick9000's timer
     GET  /api/saves/<game>              a game's state: versions, devices, conflict, log,
@@ -14,6 +15,9 @@ the agents and the page use, behind games.brick.nozdormu.cloud/api/saves.
     POST /api/saves/<game>/keep         {"sha": ...}: the user's pick in a conflict
     POST /api/saves/seen?device=        an agent's run finished (its last-sync time)
     GET  /health /metrics
+
+Each of a game's calls takes `track=slot10` for its state slot 10 (an upload
+also `core=`, the core that made it); without it, the in-game save.
 
 LAN only, like the page. Games come from the catalog the scan writes (DATA,
 read-only); saves live in the library (LIBRARY, read-write; saves.py).
@@ -43,6 +47,7 @@ CONFIG_FILE = Path(__file__).with_name("saves.yaml")
 AGENT_FILE = Path(__file__).with_name("saves_agent.py")
 GAME = re.compile(r"^/api/saves/(?P<game>[0-9a-f]{16})(?:/(?P<what>upload|keep|[0-9a-f]{64}))?$")
 MAX_SAVE = 8 * 2**20  # bytes: the biggest battery saves and cards are well under this
+MAX_STATE = 32 * 2**20  # a state is the core's whole machine: PlayStation and N64 ones run to megabytes
 EVENTS = Counter("games_saves_events_total", "Save events, by type and the referee's outcome", ["type", "outcome"])
 CONFLICTS = Gauge("games_saves_conflicts", "Games whose saves wait for the user's pick")
 GAMES = Gauge("games_saves_games", "Games with at least one synced save")
@@ -112,20 +117,26 @@ class Service:
     def gauges(self) -> None:
         states = self.store.states()
         GAMES.set(len(states))
-        CONFLICTS.set(sum(1 for s in states if s["conflict"]))
+        CONFLICTS.set(sum(1 for s in states + self.store.states(saves.SLOT10) if s["conflict"]))
 
-    def state(self, game: dict) -> dict:
+    def state(self, game: dict, track: str = saves.SAVE) -> dict:
         """A game's state, with what's in each version."""
-        state = self.store.load(game)
-        state["about"] = {sha: about(game["system"], game["title"], self.store.blob_path(game, sha))
-                          for sha in state["versions"]}
+        state = self.store.load(game, track)
+        if track == saves.SLOT10:  # a core's snapshot: nothing to read in it but which core
+            state["about"] = {sha: {"blank": False, "summary": f"state, {v.get('core') or 'core unknown'}"}
+                              for sha, v in state["versions"].items()}
+        else:
+            state["about"] = {sha: about(game["system"], game["title"], self.store.blob_path(game, sha))
+                              for sha in state["versions"]}
         return state
 
-    def emit(self, game: dict, event: dict) -> dict:
+    def emit(self, game: dict, event: dict, track: str = saves.SAVE) -> dict:
         event |= {"id": uuid.uuid4().hex, "game": game["id"], "at": time.time()}
+        if track != saves.SAVE:
+            event["track"] = track
         self.events.produce(game["id"], event)
         self.referee.wait(event["id"])
-        return self.state(game)
+        return self.state(game, track)
 
 
 class BadRequest(ValueError):
@@ -171,14 +182,22 @@ class Handler(BaseHTTPRequestHandler):
             raise LookupError("unknown device")
         return device
 
-    def _body(self) -> bytes:
+    def _body(self, limit: int = MAX_SAVE) -> bytes:
+        """The request's body, refused before it's read when it's over limit."""
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             raise BadRequest("a bad Content-Length") from None
-        if not 0 <= length <= MAX_SAVE:
-            raise BadRequest(f"a body of 0 to {MAX_SAVE} bytes")
+        if not 0 <= length <= limit:
+            raise BadRequest(f"a body of 0 to {limit} bytes")
         return self.rfile.read(length)
+
+    @staticmethod
+    def _track(q: dict[str, str]) -> str:
+        track = q.get("track") or saves.SAVE
+        if track not in saves.TRACK_FILES:
+            raise BadRequest(f"track is {' or '.join(saves.TRACK_FILES)}")
+        return track
 
     def do_GET(self) -> None:
         path, q = self._request()
@@ -209,31 +228,36 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/saves/agent.py":
             self._send(200, AGENT_FILE.read_bytes(), "text/x-python; charset=utf-8")
         elif (m := GAME.match(path)) and m["what"] is None:
-            self._json(200, self.service.state(self._game(m["game"])))
+            self._json(200, self.service.state(self._game(m["game"]), self._track(q)))
         elif m and len(m["what"]) == 64:
-            self._blob(self._game(m["game"]), m["what"])
+            self._blob(self._game(m["game"]), m["what"], self._track(q))
         else:
             raise LookupError("not found")
 
     def _summary(self) -> dict:
-        games = [{"game": s["game"], "system": s["system"], "title": s["title"], "head": s["head"],
-                  "conflict": bool(s["conflict"]),
-                  "devices": {d: v["sha"] == s["head"] for d, v in s["devices"].items()}}
-                 for s in self.service.store.states()]
-        return {"games": games, "last_sync": self.service.last_sync,
+        def entry(s: dict) -> dict:
+            head = s["versions"].get(s["head"] or "", {})
+            return {"game": s["game"], "system": s["system"], "title": s["title"], "head": s["head"],
+                    "conflict": bool(s["conflict"]), "core": head.get("core"),
+                    "devices": {d: v["sha"] == s["head"] for d, v in s["devices"].items()}}
+
+        # states apart from games: an agent from before slot 10 must never take a state for a save
+        return {"games": [entry(s) for s in self.service.store.states()],
+                "states": [entry(s) for s in self.service.store.states(saves.SLOT10)],
+                "last_sync": self.service.last_sync,
                 "devices": {k: v["name"] for k, v in self.service.config.items()}}
 
-    def _blob(self, game: dict, sha: str) -> None:
-        path = self.service.store.blob_path(game, sha)
+    def _blob(self, game: dict, sha: str, track: str) -> None:
+        path = self.service.store.blob_path(game, sha, track)
         if not path.is_file():
             raise LookupError("no such version")
-        names = self.service.store.load(game)["versions"].get(sha, {}).get("names", {})
+        names = self.service.store.load(game, track)["versions"].get(sha, {}).get("names", {})
         name = next(iter(names.values()), path.name)
         self._send(200, path.read_bytes(), "application/octet-stream",
                    {"Content-Disposition": f'attachment; filename="{name}"'})
 
     def _post(self, path: str, q: dict[str, str]) -> None:
-        body = self._body()
+        body = self._body(MAX_STATE if self._track(q) == saves.SLOT10 else MAX_SAVE)
         if path == "/api/saves/seen":
             device = self._device(q)
             self.service.last_sync[device] = time.time()
@@ -243,33 +267,44 @@ class Handler(BaseHTTPRequestHandler):
         m = GAME.match(path)
         if not m or m["what"] not in ("upload", "keep"):
             raise LookupError("not found")
-        game = self._game(m["game"])
+        game, track = self._game(m["game"]), self._track(q)
         if m["what"] == "keep":
-            self._json(200, self._keep(game, body))
+            self._json(200, self._keep(game, track, body))
         else:
-            self._json(200, self._upload(game, self._device(q), body, q))
+            self._json(200, self._upload(game, track, self._device(q), body, q))
 
-    def _keep(self, game: dict, body: bytes) -> dict:
+    def _keep(self, game: dict, track: str, body: bytes) -> dict:
         try:
             sha = json.loads(body)["sha"]
         except (ValueError, KeyError, TypeError):
             raise BadRequest('send {"sha": "<the version to keep>"}') from None
-        if sha not in self.service.store.load(game)["versions"]:
+        if sha not in self.service.store.load(game, track)["versions"]:
             raise LookupError("no such version")
-        return self.service.emit(game, {"type": "kept", "sha": sha})
+        return self.service.emit(game, {"type": "kept", "sha": sha}, track)
 
-    def _upload(self, game: dict, device: str, body: bytes, q: dict[str, str]) -> dict:
+    def _upload(self, game: dict, track: str, device: str, body: bytes, q: dict[str, str]) -> dict:
         if not body:
             raise BadRequest("an empty save")
-        if saves.kind_of(game["system"]) == "ps1" and len(body) != saves.PS1_CARD:
-            raise BadRequest(f"a PlayStation card is {saves.PS1_CARD} bytes, this is {len(body)}")
+        event = {"type": "uploaded", "device": device, "name": q.get("name", ""), "size": len(body)}
+        if track == saves.SLOT10:
+            if not q.get("core"):
+                raise BadRequest("a state needs core=: the core that made it")
+            event["core"] = q["core"]
+        else:
+            if saves.kind_of(game["system"]) == "ps1" and len(body) != saves.PS1_CARD:
+                raise BadRequest(f"a PlayStation card is {saves.PS1_CARD} bytes, this is {len(body)}")
+            # nothing saved in it (an emulator's fresh file): never over a real save (#32)
+            event["blank"] = bool(save_decode.describe(game, body)["blank"])
+            head = self.service.store.load(game)["head"]
+            if head:  # whether the current one is blank, for versions stored before the flag
+                current = self.service.store.blob_path(game, head)
+                event["head_blank"] = about(game["system"], game["title"], current)["blank"]
         try:
-            mtime = float(q["mtime"]) if q.get("mtime") else None
+            event["mtime"] = float(q["mtime"]) if q.get("mtime") else None
         except ValueError:
             raise BadRequest("mtime is seconds since 1970") from None
-        sha = self.service.store.put_blob(game, body)
-        return self.service.emit(game, {"type": "uploaded", "sha": sha, "device": device, "name": q.get("name", ""),
-                                        "size": len(body), "mtime": mtime, "parent": q.get("parent") or None})
+        event |= {"sha": self.service.store.put_blob(game, body, track), "parent": q.get("parent") or None}
+        return self.service.emit(game, event, track)
 
 
 def serve(data: Path, lib: Path, port: int, kafka: str | None) -> None:

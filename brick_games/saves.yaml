@@ -12,7 +12,13 @@
 #                first root with `write` for a save's kind gets new saves; a
 #                map of system -> name where RetroArch keeps a folder per core
 #                (a system it doesn't name gets no new saves)
-#     kind:      sram (battery saves) or ps1 (memory cards); default: both
+#     kind:      sram (battery saves) or ps1 (memory cards); default: both;
+#                state: RetroArch's states, of which only slot 10 is shared
+#                (match "*.state10"; slots 0-9 stay on the device)
+#   cores:  system -> the core this device runs it with, for state slot 10: a
+#           state only loads in the core that made it, so it's written only
+#           onto a device with the same core; a system not named here keeps
+#           its states to itself
 #   skip:   systems this device doesn't sync (Dreamcast until every device
 #           plays it in Flycast: brick-games#20)
 #   roms:   folders whose ROM names a new save takes (a device's names can
@@ -24,12 +30,31 @@
 # the SD card; DuckStation cards per game) and the RG476H (RetroArch saves
 # in one flat folder, DuckStation's cards in its app folder, ROMs on the SD
 # card).
+#
+# State slot 10 (2026-11-24): brick9000's cores from its RetroArch playlists
+# (states flat in ~/games/states, brick-cicd-config's retroarch.cfg); the
+# RG476H's from RetroArch's play logs (Snes9x, Genesis Plus GX, FinalBurn
+# Neo) and FCEUmm for NES (rg476h.md), states flat in RetroArch/states; its
+# other systems aren't checked yet. The Retroid isn't set up for states yet.
 
 devices:
   brick9000:
     name: brick9000
     roots:
       - {path: "~/games/saves", match: ["*.srm"], write: "{stem}.srm"}
+      - {path: "~/games/states", match: ["*.state10"], kind: state, write: "{stem}.state10"}
+    cores:
+      nes: Nestopia
+      snes: Snes9x
+      gb: Gambatte
+      gba: mGBA
+      megadrive: Genesis Plus GX
+      gamegear: Genesis Plus GX
+      sega32x: PicoDrive
+      segacd: PicoDrive
+      pce: Beetle PCE Fast
+      neogeo: FinalBurn Neo
+      psx: PCSX-ReARMed
     skip: [dreamcast]
     roms:
       - "~/games/roms"
@@ -66,6 +91,13 @@ devices:
       - {path: "/sdcard/RetroArch/saves", match: ["*.srm"], recursive: true, kind: sram, write: "{stem}.srm"}
       - {path: "/sdcard/Android/data/com.github.stenzek.duckstation/files/memcards", match: ["*_1.mcd"],
          system: psx, strip: "_1", kind: ps1, write: "{stem}_1.mcd"}
+      - {path: "/sdcard/RetroArch/states", match: ["*.state10"], kind: state, write: "{stem}.state10"}
+    cores:
+      nes: FCEUmm
+      snes: Snes9x
+      megadrive: Genesis Plus GX
+      neogeo: FinalBurn Neo
+      arcade: FinalBurn Neo
     # N64 is M64Plus FZ Pro and DS is DraStic there: neither keeps RetroArch saves.
     skip: [dreamcast, n64, nds]
     roms:
