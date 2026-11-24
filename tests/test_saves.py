@@ -38,6 +38,10 @@ def test_the_agents_names_match_the_scans(name):
     assert saves_agent.norm(name) == sources.norm(name)
 
 
+class Env(tuple):
+    """(base, tmp_path, lib), plus .svc: the Service."""
+
+
 @pytest.fixture
 def service(tmp_path, monkeypatch):
     data, lib = tmp_path / "data", tmp_path / "library"
@@ -70,7 +74,9 @@ def service(tmp_path, monkeypatch):
         return real(self, method, path, body, query)
 
     monkeypatch.setattr(saves_agent.Server, "json", json_)
-    yield base, tmp_path, lib
+    env = Env((base, tmp_path, lib))
+    env.svc = svc  # for tests that change a device's settings
+    yield env
     srv.shutdown()
     srv.server_close()
     svc.stop.set()
@@ -87,8 +93,8 @@ def run(base, device, tmp_path, **kw):
                             tmp_path / "state" / f"{device}.json", say=lambda *a: None, **kw)
 
 
-def state(base, game_id):
-    with urllib.request.urlopen(f"{base}/api/saves/{game_id}") as r:
+def state(base, game_id, track=None):
+    with urllib.request.urlopen(f"{base}/api/saves/{game_id}" + (f"?track={track}" if track else "")) as r:
         return json.loads(r.read())
 
 
@@ -314,23 +320,9 @@ def states_config(svc, tmp, rp_core="Snes9x"):
         svc.config[device]["cores"] = {"snes": core}
 
 
-@pytest.fixture
-def svc(tmp_path, monkeypatch):
-    """The service fixture, with the Service object too (to set up state slots)."""
-    made = {}
-    real_init = saves_web.Service.__init__
-
-    def init(self, *a, **k):
-        real_init(self, *a, **k)
-        made["svc"] = self
-
-    monkeypatch.setattr(saves_web.Service, "__init__", init)
-    return made
-
-
-def test_slot_10_goes_to_a_device_with_the_same_core_and_slots_0_to_9_stay(svc, service):
+def test_slot_10_goes_to_a_device_with_the_same_core_and_slots_0_to_9_stay(service):
     base, tmp, lib = service
-    states_config(svc["svc"], tmp)
+    states_config(service.svc, tmp)
     put(tmp / "rp-roms" / "SNES" / "Super Metroid (USA).sfc", b"rom")
     put(tmp / "b9k-states" / "Super Metroid (JU) [!].state10", b"shared state")
     put(tmp / "b9k-states" / "Super Metroid (JU) [!].state1", b"brick9000's own")
@@ -338,7 +330,7 @@ def test_slot_10_goes_to_a_device_with_the_same_core_and_slots_0_to_9_stay(svc, 
     assert run(base, "rp2plus", tmp)["written"] == 1
     assert (tmp / "rp-states" / "Super Metroid (USA).state10").read_bytes() == b"shared state"
     assert not (tmp / "rp-states" / "Super Metroid (USA).state1").exists()
-    s = state(base, f"{GAME['id']}?track=slot10")
+    s = state(base, GAME["id"], "slot10")
     assert s["versions"][s["head"]]["core"] == "snes9x_libretro.so"
     assert (lib / "snes" / "saves" / "Super Metroid" / "history" / f"{s['head']}.state").read_bytes() == b"shared state"
     # the in-game save track knows nothing of it, so an agent from before slot 10 can't mix them up
@@ -347,9 +339,9 @@ def test_slot_10_goes_to_a_device_with_the_same_core_and_slots_0_to_9_stay(svc, 
     assert summary["games"] == [] and summary["states"][0]["core"] == "snes9x_libretro.so"
 
 
-def test_slot_10_never_goes_to_a_device_with_another_core(svc, service):
+def test_slot_10_never_goes_to_a_device_with_another_core(service):
     base, tmp, _ = service
-    states_config(svc["svc"], tmp, rp_core="bsnes")
+    states_config(service.svc, tmp, rp_core="bsnes")
     put(tmp / "rp-roms" / "SNES" / "Super Metroid (USA).sfc", b"rom")
     put(tmp / "b9k-states" / "Super Metroid (JU) [!].state10", b"snes9x state")
     run(base, "brick9000", tmp)
@@ -374,3 +366,21 @@ def test_a_state_needs_its_core(service):
                                             ("snes9x_libretro_android.so", "snes9x"), (None, "")])
 def test_core_ids(name, core):
     assert saves_agent.core_id(name) == core
+
+
+def test_an_event_for_an_unknown_track_never_stops_the_referee(tmp_path):
+    ref = saves.Referee(saves.Store(tmp_path), lambda: {GAME["id"]: GAME})
+    event = up("v1", "brick9000") | {"id": "e1", "game": GAME["id"], "track": "slot99"}
+    assert ref.handle(event) == "unknown-track"
+
+
+def test_an_in_game_save_over_8_mib_is_refused_before_it_is_read(service):
+    import http.client
+
+    base, _, _ = service
+    conn = http.client.HTTPConnection(base.removeprefix("http://"), timeout=5)
+    conn.putrequest("POST", f"/api/saves/{GAME['id']}/upload?device=rp2plus&name=x")
+    conn.putheader("Content-Length", str(saves_web.MAX_SAVE + 1))
+    conn.endheaders()  # the headers alone: the answer comes before any body is sent
+    assert conn.getresponse().status == 400
+    conn.close()

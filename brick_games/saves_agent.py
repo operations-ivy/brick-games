@@ -90,6 +90,12 @@ def file_key(game_id: str, track: str) -> str:
     return game_id if track == SAVE else f"{game_id}#{track}"
 
 
+def split_key(key: str) -> tuple[str, str]:
+    """file_key's inverse: (game id, track)."""
+    game_id, _, track = key.partition("#")
+    return game_id, track or SAVE
+
+
 class Local:
     """This machine's files."""
 
@@ -222,8 +228,9 @@ def find_saves(fs, cfg: dict, games: Games, roms: dict[str, str] | None = None,
     skip, known = cfg.get("skip", []), known or {}
     cores = cfg.get("cores", {})
     for root in cfg["roots"]:
-        if (root.get("kind") == "state") != (track == SLOT10):
-            continue
+        is_state_root = root.get("kind") == "state"
+        if is_state_root != (track == SLOT10):
+            continue  # state roots are slot 10's, the others the in-game saves'
         folders = core_folders(root)
         for path, size, mtime in fs.list(root["path"], root.get("recursive", False)):
             name = posixpath.basename(path)
@@ -311,10 +318,13 @@ class Sync:
         self.cores = self.cfg.get("cores", {})
         self.games = Games(server.json("GET", "/api/catalog"))
         self.stems = rom_stems(fs, self.cfg, self.games) if self.cfg.get("roms") else None
-        self.found = {}
+        self.found: dict[str, dict[str, tuple[str, int, float]]] = {}
         for track in (SAVE, SLOT10):
-            # path -> game id, for this track's entries (file_key: "<game>#slot10" for states)
-            known = {f["path"]: key.split("#")[0] for key, f in files.items() if ("#" in key) == (track != SAVE)}
+            known = {}  # path -> game id, from this track's last sync
+            for key, f in files.items():
+                game_id, key_track = split_key(key)
+                if key_track == track:
+                    known[f["path"]] = game_id
             self.found[track] = find_saves(fs, self.cfg, self.games, self.stems, known, track)
         self.done = {"uploaded": 0, "written": 0, "conflicts": 0, "same": 0}
 

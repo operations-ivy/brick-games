@@ -134,12 +134,14 @@ class Store:
 
     def load(self, game: dict, track: str = SAVE) -> dict[str, Any]:
         try:
-            return json.loads((self.folder(game) / TRACK_FILES[track]).read_text())
+            state = json.loads((self.folder(game) / TRACK_FILES[track]).read_text())
         except FileNotFoundError:
             return new_state(game, track)
+        state.setdefault("track", track)  # written before tracks: the in-game save's
+        return state
 
     def save(self, game: dict, state: dict[str, Any]) -> None:
-        write(self.folder(game) / TRACK_FILES[state.get("track", SAVE)], json.dumps(state, indent=1).encode())
+        write(self.folder(game) / TRACK_FILES[state["track"]], json.dumps(state, indent=1).encode())
 
     def blob_path(self, game: dict, sha: str, track: str = SAVE) -> Path:
         return self.folder(game) / "history" / f"{sha}.{EXTENSIONS[track_kind(game, track)]}"
@@ -259,14 +261,18 @@ class Referee:
 
     def handle(self, event: dict[str, Any]) -> str:
         game = self.games().get(event["game"])
+        track = event.get("track", SAVE)
         if game is None:
             log.warning("save event for a game not in the catalog", game=event["game"])
             outcome = "unknown-game"
+        elif track not in TRACK_FILES:  # never stop the referee over one bad event
+            log.warning("save event for an unknown track", game=event["game"], track=track)
+            outcome = "unknown-track"
         else:
-            state = self.store.load(game, event.get("track", SAVE))
+            state = self.store.load(game, track)
             outcome = apply(state, event)
             self.store.save(game, state)
-            log.info("save event", game=game["title"], system=game["system"], track=state.get("track", SAVE),
+            log.info("save event", game=game["title"], system=game["system"], track=track,
                      type=event["type"], device=event.get("device"), outcome=outcome)
         with self.applied:
             self.outcomes[outcome] += 1

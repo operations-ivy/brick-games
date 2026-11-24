@@ -13,11 +13,11 @@ the agents and the page use, behind games.brick.nozdormu.cloud/api/saves.
                                         a device's save (the body): stored by its hash,
                                         then an "uploaded" event; answers the new state
     POST /api/saves/<game>/keep         {"sha": ...}: the user's pick in a conflict
+    POST /api/saves/seen?device=        an agent's run finished (its last-sync time)
+    GET  /health /metrics
 
 Each of a game's calls takes `track=slot10` for its state slot 10 (an upload
 also `core=`, the core that made it); without it, the in-game save.
-    POST /api/saves/seen?device=        an agent's run finished (its last-sync time)
-    GET  /health /metrics
 
 LAN only, like the page. Games come from the catalog the scan writes (DATA,
 read-only); saves live in the library (LIBRARY, read-write; saves.py).
@@ -182,13 +182,14 @@ class Handler(BaseHTTPRequestHandler):
             raise LookupError("unknown device")
         return device
 
-    def _body(self) -> bytes:
+    def _body(self, limit: int = MAX_SAVE) -> bytes:
+        """The request's body, refused before it's read when it's over limit."""
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             raise BadRequest("a bad Content-Length") from None
-        if not 0 <= length <= MAX_STATE:
-            raise BadRequest(f"a body of 0 to {MAX_STATE} bytes")
+        if not 0 <= length <= limit:
+            raise BadRequest(f"a body of 0 to {limit} bytes")
         return self.rfile.read(length)
 
     @staticmethod
@@ -256,7 +257,7 @@ class Handler(BaseHTTPRequestHandler):
                    {"Content-Disposition": f'attachment; filename="{name}"'})
 
     def _post(self, path: str, q: dict[str, str]) -> None:
-        body = self._body()
+        body = self._body(MAX_STATE if self._track(q) == saves.SLOT10 else MAX_SAVE)
         if path == "/api/saves/seen":
             device = self._device(q)
             self.service.last_sync[device] = time.time()
@@ -290,8 +291,6 @@ class Handler(BaseHTTPRequestHandler):
                 raise BadRequest("a state needs core=: the core that made it")
             event["core"] = q["core"]
         else:
-            if len(body) > MAX_SAVE:
-                raise BadRequest(f"a save of at most {MAX_SAVE} bytes")
             if saves.kind_of(game["system"]) == "ps1" and len(body) != saves.PS1_CARD:
                 raise BadRequest(f"a PlayStation card is {saves.PS1_CARD} bytes, this is {len(body)}")
             # nothing saved in it (an emulator's fresh file): never over a real save (#32)
