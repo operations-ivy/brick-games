@@ -126,8 +126,18 @@ devices play each system (brick-k8s-config#108).
 - **Save sync** (brick-games#19, the user, 2026-11-21): brick9000, the
   Retroid and the RG476H share their saves (`saves.py`). Battery saves
   (RetroArch `.srm`) and PlayStation memory cards (DuckStation's
-  `<game>_1.mcd`, PCSX-ReARMed's `.srm`: both a raw 128 KiB card) sync;
-  save states never do (they're tied to a core's version).
+  `<game>_1.mcd`, PCSX-ReARMed's `.srm`: both a raw 128 KiB card) sync.
+  - **State slot 10 is the shared slot** (the user, 2026-11-24): RetroArch's
+    `<game>.state10` syncs as its own track beside the in-game save; slots
+    0-9 stay on their device. A state loads only in the core that made it,
+    so each device names its core per system (`saves.yaml`'s `cores`) and a
+    state is written only onto a device running that core; the agent says
+    when it skips one. Systems without a core named keep their states.
+    The game's details show slot 10 under the save, with its own pick.
+  - **A blank save never replaces a real one** (brick-games#32): an
+    emulator's fresh `.srm` (nothing saved in it, `save_decode`) is kept
+    and logged `blank`, the current version stays, and the device gets it
+    back. A real save over a blank current one moves it forward.
   - **The agent** (`saves_agent.py`, standard library only) runs on each
     device: brick9000's `brick-saves.timer` every 10 minutes
     (brick-cicd-config), a handheld from the laptop over adb when it's
@@ -145,7 +155,8 @@ devices play each system (brick-k8s-config#108).
     until then the current version stays and no device is overwritten. The
     header shows how many games wait for a pick. No version is ever deleted.
   - **Stored** in the library: `/extra/brick-games/<system>/saves/<Title>/`
-    (`state.json`, and `history/` with every version by its SHA-256);
+    (`state.json`, `slot10.json` for slot 10, and `history/` with every
+    version by its SHA-256);
     outside the Samba share and brick9000's ROM sync. The topic is kept for
     good, a second record.
   - **The page:** each game's details show its saves: each device's copy

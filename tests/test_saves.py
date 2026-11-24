@@ -269,3 +269,108 @@ def test_the_service_says_whats_in_each_version(service):
     run(base, "brick9000", tmp)
     about = state(base, GAME["id"])["about"]
     assert list(about.values()) == [{"blank": True, "summary": "no saved slots"}]
+
+
+# brick-games#32: a blank save never replaces a real one.
+def blank_up(sha, device, parent=None):
+    return up(sha, device, parent) | {"blank": True}
+
+
+def test_a_blank_save_never_replaces_a_real_one():
+    s = saves.new_state(GAME)
+    saves.apply(s, up("real", "rg476h"))
+    # brick9000's emulator wrote a fresh .srm, and it was uploaded as if it were progress
+    assert saves.apply(s, blank_up("zeros", "brick9000", parent="real")) == "blank"
+    assert s["head"] == "real" and s["conflict"] == [] and s["versions"]["zeros"]["blank"]
+    # nor does it join a conflict
+    saves.apply(s, up("other", "rp2plus", parent="old"))
+    assert saves.apply(s, blank_up("zeros", "brick9000")) == "blank" and "zeros" not in s["conflict"]
+
+
+def test_a_real_save_moves_on_from_a_blank_one():
+    s = saves.new_state(GAME)
+    assert saves.apply(s, blank_up("zeros", "brick9000")) == "first"
+    # the RG476H's real save never had the blank as its parent: forward all the same, no conflict
+    assert saves.apply(s, up("real", "rg476h")) == "forward" and s["head"] == "real"
+
+
+def test_a_device_that_blanked_its_save_gets_the_real_one_back(service):
+    base, tmp, _ = service
+    b9k = put(tmp / "b9k" / "Super Metroid (JU) [!].srm", b"real progress")
+    run(base, "brick9000", tmp)
+    b9k.write_bytes(bytes(8192))  # the emulator started the game afresh
+    done = run(base, "brick9000", tmp)
+    assert (done["uploaded"], done["written"]) == (1, 1)
+    assert b9k.read_bytes() == b"real progress"
+    s = state(base, GAME["id"])
+    assert s["log"][-2]["outcome"] == "blank" and len(s["versions"]) == 2
+
+
+# State slot 10: shared between devices that run the same core for the system.
+def states_config(svc, tmp, rp_core="Snes9x"):
+    for device, folder, core in (("brick9000", "b9k-states", "snes9x_libretro.so"), ("rp2plus", "rp-states", rp_core)):
+        svc.config[device]["roots"].append(
+            {"path": str(tmp / folder), "match": ["*.state10"], "kind": "state", "write": "{stem}.state10"})
+        svc.config[device]["cores"] = {"snes": core}
+
+
+@pytest.fixture
+def svc(tmp_path, monkeypatch):
+    """The service fixture, with the Service object too (to set up state slots)."""
+    made = {}
+    real_init = saves_web.Service.__init__
+
+    def init(self, *a, **k):
+        real_init(self, *a, **k)
+        made["svc"] = self
+
+    monkeypatch.setattr(saves_web.Service, "__init__", init)
+    return made
+
+
+def test_slot_10_goes_to_a_device_with_the_same_core_and_slots_0_to_9_stay(svc, service):
+    base, tmp, lib = service
+    states_config(svc["svc"], tmp)
+    put(tmp / "rp-roms" / "SNES" / "Super Metroid (USA).sfc", b"rom")
+    put(tmp / "b9k-states" / "Super Metroid (JU) [!].state10", b"shared state")
+    put(tmp / "b9k-states" / "Super Metroid (JU) [!].state1", b"brick9000's own")
+    assert run(base, "brick9000", tmp)["uploaded"] == 1
+    assert run(base, "rp2plus", tmp)["written"] == 1
+    assert (tmp / "rp-states" / "Super Metroid (USA).state10").read_bytes() == b"shared state"
+    assert not (tmp / "rp-states" / "Super Metroid (USA).state1").exists()
+    s = state(base, f"{GAME['id']}?track=slot10")
+    assert s["versions"][s["head"]]["core"] == "snes9x_libretro.so"
+    assert (lib / "snes" / "saves" / "Super Metroid" / "history" / f"{s['head']}.state").read_bytes() == b"shared state"
+    # the in-game save track knows nothing of it, so an agent from before slot 10 can't mix them up
+    with urllib.request.urlopen(f"{base}/api/saves") as r:
+        summary = json.loads(r.read())
+    assert summary["games"] == [] and summary["states"][0]["core"] == "snes9x_libretro.so"
+
+
+def test_slot_10_never_goes_to_a_device_with_another_core(svc, service):
+    base, tmp, _ = service
+    states_config(svc["svc"], tmp, rp_core="bsnes")
+    put(tmp / "rp-roms" / "SNES" / "Super Metroid (USA).sfc", b"rom")
+    put(tmp / "b9k-states" / "Super Metroid (JU) [!].state10", b"snes9x state")
+    run(base, "brick9000", tmp)
+    said = []
+    saves_agent.sync(saves_agent.Server(base), saves_agent.Local(), "rp2plus", tmp / "state" / "rp2plus.json",
+                     say=said.append)
+    assert not (tmp / "rp-states").exists()
+    assert any("made with snes9x_libretro.so, this device runs bsnes" in line for line in said)
+
+
+def test_a_state_needs_its_core(service):
+    base, _, _ = service
+    req = urllib.request.Request(f"{base}/api/saves/{GAME['id']}/upload?device=rp2plus&name=x&track=slot10",
+                                 data=b"state", method="POST")
+    with pytest.raises(urllib.error.HTTPError) as e:
+        urllib.request.urlopen(req)
+    assert e.value.code == 400
+
+
+@pytest.mark.parametrize(("name", "core"), [("Genesis Plus GX", "genesisplusgx"),
+                                            ("genesis_plus_gx_libretro.so", "genesisplusgx"),
+                                            ("snes9x_libretro_android.so", "snes9x"), (None, "")])
+def test_core_ids(name, core):
+    assert saves_agent.core_id(name) == core
